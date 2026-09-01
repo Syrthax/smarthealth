@@ -1,26 +1,94 @@
+/* Hallmark · macrostructure: Workbench · genre: modern-minimal
+ * theme: custom (vibe: "clinical, institutional, calm authority")
+ * paper oklch(99% 0.003 250) light · display IBM Plex Sans 600 · accent oklch(48% 0.15 255) cool
+ * pre-emit critique: P5 H5 E4 S5 R5 V4
+ */
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* --- colour ------------------------------------------------------- */
+  --color-paper: oklch(99% 0.003 250);
+  --color-surface: oklch(97% 0.006 250);
+  --color-surface-2: oklch(94.5% 0.008 250);
+  --color-ink: oklch(22% 0.02 250);
+  --color-muted: oklch(52% 0.015 250);
+  --color-rule: oklch(91% 0.008 250);
+  --color-accent: oklch(48% 0.15 255);
+  --color-accent-hover: oklch(41% 0.15 255);
+  --color-accent-wash: oklch(96% 0.02 255);
+  --color-alert: oklch(52% 0.19 27);
+  --color-alert-wash: oklch(96.5% 0.02 27);
+  --color-success: oklch(48% 0.11 155);
+  --color-success-wash: oklch(96.5% 0.025 155);
+
+  /* --- type --------------------------------------------------------- */
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  /* --- radius (clinical, not pillowy) ------------------------------- */
+  --radius-ctl: 6px;
+  --radius-card: 8px;
+
+  /* --- motion ------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  html {
+    overflow-x: clip;
+  }
+  body {
+    overflow-x: clip;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3 {
+    font-weight: 600;
+    letter-spacing: -0.021em;
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+  /* Never animated — must appear the instant focus lands. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 3px;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer utilities {
+  .rise-in {
+    animation: rise-in 220ms var(--ease-out) both;
+  }
+  .panel-in {
+    animation: panel-in 180ms var(--ease-out) both;
+  }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: scale(0.985) translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise-in, .panel-in {
+    animation: fade-only 140ms var(--ease-out) both;
+  }
+  @keyframes fade-only {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+  }
 }

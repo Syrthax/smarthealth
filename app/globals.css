@@ -18,6 +18,8 @@
   --color-accent-wash: oklch(96% 0.02 255);
   --color-alert: oklch(52% 0.19 27);
   --color-alert-wash: oklch(96.5% 0.02 27);
+  --color-warn: oklch(52% 0.13 65);
+  --color-warn-wash: oklch(96.5% 0.03 65);
   --color-success: oklch(48% 0.11 155);
   --color-success-wash: oklch(96.5% 0.025 155);
 

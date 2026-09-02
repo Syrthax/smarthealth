@@ -1,11 +1,14 @@
 # Meridian Health City
 
-A demo hospital website with an intake assistant in the bottom-right corner. You describe
-what you have been feeling; it works out which department you belong at and which tests are
-worth having ready, then books both in one click.
+A demo hospital website with a preliminary health assistant in the bottom-right corner. You
+describe what you have been feeling; it tells you what that pattern is commonly investigated
+for, how soon you ought to be seen, what to do next, and which department to go to — then
+books the consultation and any useful tests in one click.
 
-**It never gives medical advice.** No diagnosis, no condition names, no medication, no
-severity judgements. It routes and it books — that is the whole job.
+**It advises, but it does not practise medicine.** It will tell you the general area a
+doctor would want to rule out and how urgent it looks. It will never name a medication or a
+dose, never hand you a treatment plan, and never state a diagnosis as fact. Every piece of
+advice it gives ends at the same place: see the right doctor.
 
 ## How the safety envelope is enforced
 
@@ -21,6 +24,21 @@ the alarm.
 **A hallucinated doctor cannot reach the UI.** The model never writes a doctor or test name
 in prose. It returns doctor ids and test codes; `app/api/chat/route.ts` resolves them against
 Postgres and silently drops anything that does not exist.
+
+**Medication advice voids the answer.** The prompt forbids it, but a prompt is not a control.
+`mentionsMedication()` scans the reply, the assessment and every next step for drug names and
+doses; one hit and the entire response is discarded rather than shown with the drug edited
+out. The user gets the degraded fallback instead.
+
+**The model does not get to invent hospital facts.** Ask about parking or visiting hours and
+an early version confidently made up both. Questions that are not about symptoms now return a
+fixed, server-written reply pointing at reception. The model is trusted with judgement about
+symptoms, never with facts it has no source for.
+
+**Nothing is silently forced into a department that does not fit.** Dental, paediatric and
+other complaints with no desk in the hospital are marked out of scope: the reply says so
+plainly and routes through General Medicine for an onward referral, rather than pretending an
+Orthopaedics booking was the answer.
 
 **The model is given meanings, not just names.** `specialties.sees` and `tests.ordered_for`
 describe in plain language what each desk handles and what each test is routinely ordered
@@ -82,9 +100,10 @@ visible rather than a dead end.
 
 ## Testing
 
-`npm test` covers the parts that must not break: that red flags fire on real emergencies,
-that they stay quiet on ordinary complaints, and that model output survives markdown fences,
-prose padding and malformed id lists.
+`npm test` covers the parts that must not break: that red flags fire on real emergencies, that
+they stay quiet on ordinary complaints, that medication advice is caught wherever it hides in
+the response, and that model output survives markdown fences, prose padding and malformed id
+lists.
 
 The rate-limit boundary is verified by hand against a live database rather than in `npm test`
 — it needs real Postgres, and the off-by-one it once had is now documented at the query
@@ -98,5 +117,6 @@ deliberate omission rather than an oversight.
 
 ## Disclaimer
 
-Fictional hospital, fictional doctors, seeded data. Not a medical device and not a source of
-medical advice.
+Fictional hospital, fictional doctors, seeded data. This is a demonstration of a triage and
+booking flow, not a medical device. Its urgency ratings and assessments are illustrative and
+should not be relied on by anyone deciding whether to seek care.

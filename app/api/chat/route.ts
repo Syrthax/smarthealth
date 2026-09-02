@@ -31,7 +31,9 @@ export async function POST(req: Request) {
   if (await overLimit(clientIp(req), "chat", CHAT_LIMIT_PER_HOUR)) {
     return Response.json(
       {
-        reply: `You have reached the limit of ${CHAT_LIMIT_PER_HOUR} messages an hour on this demo. Please call the hospital on ${EMERGENCY_LINE} or browse the doctor directory.`,
+        reply: `You have reached the limit of ${CHAT_LIMIT_PER_HOUR} messages an hour on this demo. If this is urgent, call the hospital on ${EMERGENCY_LINE} rather than waiting — otherwise the doctor directory is open and you can book directly.`,
+        urgency: "routine",
+        nextSteps: [],
         doctors: [],
         tests: [],
       },
@@ -44,7 +46,13 @@ export async function POST(req: Request) {
   if (flag) {
     return Response.json({
       emergency: { why: flag, line: EMERGENCY_LINE },
-      reply: `What you have described (${flag}) needs to be seen in person right now, not booked for later. Call ${EMERGENCY_LINE} or go to the Meridian emergency department immediately. I am not able to help further with this here.`,
+      reply: `What you have described (${flag}) needs to be seen in person right now, not booked for later. Call ${EMERGENCY_LINE} or go straight to the Meridian emergency department. Please do not wait for a booking, and do not drive yourself.`,
+      urgency: "emergency",
+      nextSteps: [
+        `Call ${EMERGENCY_LINE} now, or have someone take you to the emergency department.`,
+        "Do not drive yourself. If you are alone, stay on the line with the operator.",
+        "Take any medicines you already use, and a list of your conditions, if they are within reach.",
+      ],
       doctors: [],
       tests: [],
     });
@@ -64,7 +72,9 @@ export async function POST(req: Request) {
   if (!parsed) {
     return Response.json({
       reply:
-        "I could not process that just now. You can browse the full doctor directory and book directly, or call the hospital reception.",
+        "I could not work through that properly just now, and I would rather say so than guess. You can browse the full doctor directory and book directly, or call reception on +91 80 4000 1200 and they will place you with the right department.",
+      urgency: "routine",
+      nextSteps: [],
       doctors: [],
       tests: [],
       degraded: true,
@@ -75,9 +85,31 @@ export async function POST(req: Request) {
   const pick = <T>(rows: T[], keys: (string | number)[], keyOf: (r: T) => string | number) =>
     keys.map((k) => rows.find((r) => keyOf(r) === k)).filter((r): r is T => Boolean(r));
 
+  const hydratedDoctors = pick(doctors, parsed.doctorIds, (d) => d.id).slice(0, 3);
+
+  // Out of scope with no way in means the question was not about a symptom at all.
+  // The model has no idea what our visiting hours or parking are and will cheerfully
+  // invent both, so it does not get to answer these in its own words.
+  if (parsed.outOfScope && hydratedDoctors.length === 0) {
+    return Response.json({
+      reply:
+        "This desk only handles symptoms — I am not the right place for that, and I would rather send you to someone who actually knows than guess. Reception can help you on +91 80 4000 1200, or tell me what you have been feeling and I will pick up from there.",
+      assessment: "",
+      urgency: "routine",
+      nextSteps: [],
+      outOfScope: true,
+      doctors: [],
+      tests: [],
+    });
+  }
+
   return Response.json({
     reply: parsed.reply,
-    doctors: pick(doctors, parsed.doctorIds, (d) => d.id).slice(0, 3),
+    assessment: parsed.assessment,
+    urgency: parsed.urgency,
+    nextSteps: parsed.nextSteps,
+    outOfScope: parsed.outOfScope,
+    doctors: hydratedDoctors,
     tests: pick(tests, parsed.testCodes, (t) => t.code).slice(0, 4),
   });
 }

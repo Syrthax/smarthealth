@@ -120,3 +120,43 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The printable summary. Hidden on screen; on print it is the only thing left standing.
+   ChatWidget renders it as a direct child of <body>, which is what makes the sibling
+   rule below able to clear the page. Uses the browser's own Save as PDF — no library. */
+.print-sheet {
+  display: none;
+}
+
+@media print {
+  body > * {
+    display: none !important;
+  }
+  body > .print-sheet {
+    display: block !important;
+  }
+  @page {
+    margin: 18mm 16mm;
+  }
+  /* The app sets full-height on the document; left alone it prints a blank second page. */
+  html,
+  body {
+    height: auto !important;
+    min-height: 0 !important;
+  }
+  .print-sheet {
+    color: var(--color-ink);
+    font-size: 11pt;
+    line-height: 1.5;
+  }
+  .print-sheet .avoid-break {
+    break-inside: avoid;
+  }
+  /* Tailwind's preflight strips list markers; the summary needs them back. */
+  .print-sheet ol {
+    list-style: decimal;
+  }
+  .print-sheet ul {
+    list-style: disc;
+  }
+}

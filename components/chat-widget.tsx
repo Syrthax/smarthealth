@@ -18,6 +18,27 @@ type Msg = {
   emergency?: { why: string; line: string };
 };
 
+/**
+ * What the model gets to see of its own past turns. The prose alone loses the department
+ * and tests it settled on, so a follow-up would start from scratch and could contradict
+ * itself; this folds those decisions back into the transcript it reads.
+ */
+function forModel({ role, content, urgency, doctors, tests }: Msg) {
+  const decided = [
+    doctors?.length ? `departments: ${[...new Set(doctors.map((d) => d.specialty))].join(", ")}` : "",
+    tests?.length ? `tests: ${tests.map((t) => t.code).join(", ")}` : "",
+    urgency && urgency !== "routine" ? `urgency: ${urgency}` : "",
+  ].filter(Boolean);
+
+  return {
+    role,
+    content:
+      role === "assistant" && decided.length
+        ? `${content}\n[previously recommended: ${decided.join("; ")}]`
+        : content,
+  };
+}
+
 const REDUCED_MOTION = () =>
   typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -99,9 +120,28 @@ const OPENER: Msg = {
     "Tell me what has been going on and roughly how long for. I will tell you what it is usually looked at for, how soon you ought to be seen, and which department to go to. I cannot diagnose you or tell you what to take — that is what the consultation is for.",
 };
 
+const CHAT_KEY = "mhc.chat";
+
+/**
+ * The conversation lives in this browser and nowhere else — it is never persisted
+ * server-side, and clearing it here is the only copy there is.
+ */
+function loadChat(): Msg[] {
+  if (typeof window === "undefined") return [OPENER];
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHAT_KEY) ?? "null");
+    return Array.isArray(saved) && saved.length ? saved : [OPENER];
+  } catch {
+    return [OPENER];
+  }
+}
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Msg[]>([OPENER]);
+  const [messages, setMessages] = useState<Msg[]>(loadChat);
+  // Anything already on screen when the widget mounted is history, not a new arrival,
+  // so it must never replay the typewriter.
+  const [restoredCount, setRestoredCount] = useState(messages.length);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -126,6 +166,27 @@ export default function ChatWidget() {
     return () => window.removeEventListener("keydown", esc);
   }, []);
 
+  useEffect(() => {
+    try {
+      // A lone opener is not a conversation. Not writing it keeps "Clear" honest:
+      // afterwards there is genuinely nothing in storage.
+      if (messages.length > 1) localStorage.setItem(CHAT_KEY, JSON.stringify(messages));
+      else localStorage.removeItem(CHAT_KEY);
+    } catch {
+      /* private window or storage full — the conversation just will not outlive the tab */
+    }
+  }, [messages]);
+
+  function clearChat() {
+    setRestoredCount(1);
+    setMessages([OPENER]);
+    try {
+      localStorage.removeItem(CHAT_KEY);
+    } catch {
+      /* nothing stored to begin with */
+    }
+  }
+
   async function send(e?: React.FormEvent) {
     e?.preventDefault();
     const text = input.trim();
@@ -139,9 +200,7 @@ export default function ChatWidget() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: next.map(({ role, content }) => ({ role, content })).slice(1),
-        }),
+        body: JSON.stringify({ messages: next.slice(1).map(forModel) }),
       });
       const data = await res.json();
       setMessages((m) => [
@@ -180,6 +239,8 @@ export default function ChatWidget() {
         {open ? "Close" : "Health intake"}
       </button>
 
+      {open && <TranscriptSheet messages={messages} />}
+
       {open && (
         <section
           id="intake-panel"
@@ -191,6 +252,23 @@ export default function ChatWidget() {
             <p className="mt-0.5 text-[12px] text-muted">
               Preliminary guidance only. Does not diagnose and never advises on medication.
             </p>
+            {messages.length > 1 && (
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="rounded-ctl border border-rule px-2.5 py-1 text-[12px] font-medium transition-colors hover:bg-surface active:translate-y-px"
+                >
+                  Save for your doctor
+                </button>
+                <button
+                  onClick={clearChat}
+                  className="rounded-ctl px-2.5 py-1 text-[12px] text-muted transition-colors hover:bg-surface hover:text-ink active:translate-y-px"
+                >
+                  Clear
+                </button>
+                <span className="ml-auto text-[11px] text-muted">Kept on this device only</span>
+              </div>
+            )}
           </header>
 
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
@@ -208,7 +286,7 @@ export default function ChatWidget() {
                   message={m}
                   // The opener is already on screen when the panel opens; only a freshly
                   // arrived answer types itself out.
-                  typing={i > 0 && i === messages.length - 1}
+                  typing={i >= restoredCount && i === messages.length - 1}
                   onGrow={stickToBottom}
                 />
               ),
@@ -244,6 +322,95 @@ export default function ChatWidget() {
         </section>
       )}
     </>
+  );
+}
+
+/**
+ * What the visitor hands the doctor. People forget in the waiting room what they managed
+ * to describe clearly an hour earlier, so this is their own words back, with what the
+ * assistant made of them — clearly labelled as neither a diagnosis nor a medical record.
+ */
+function TranscriptSheet({ messages }: { messages: Msg[] }) {
+  const said = messages.filter((m) => m.role === "user");
+  if (!said.length) return null;
+
+  const now = new Date().toLocaleString("en-IN", {
+    dateStyle: "long",
+    timeStyle: "short",
+  });
+
+  return (
+    <div className="print-sheet">
+      <h1 style={{ fontSize: "16pt", margin: 0 }}>Symptom summary</h1>
+      <p style={{ margin: "2pt 0 0", fontSize: "10pt" }}>
+        Meridian Health City · prepared {now}
+      </p>
+
+      <p
+        className="avoid-break"
+        style={{
+          margin: "12pt 0",
+          padding: "8pt 10pt",
+          border: "1pt solid currentColor",
+          fontSize: "10pt",
+        }}
+      >
+        <strong>For the consultation, not a medical record.</strong> Everything below is what
+        the patient reported to an automated assistant before their appointment, plus that
+        assistant&rsquo;s preliminary suggestions. It contains no diagnosis, no examination and
+        no medication advice, and none of it has been reviewed by a clinician.
+      </p>
+
+      <h2 style={{ fontSize: "12pt", marginTop: "16pt" }}>In the patient&rsquo;s own words</h2>
+      <ol style={{ margin: "6pt 0 0", paddingLeft: "16pt" }}>
+        {said.map((m, i) => (
+          <li key={i} className="avoid-break" style={{ marginBottom: "5pt" }}>
+            {m.content}
+          </li>
+        ))}
+      </ol>
+
+      {messages.map((m, i) =>
+        m.role !== "assistant" || (!m.assessment && !m.doctors?.length && !m.nextSteps?.length) ? null : (
+          <section key={i} className="avoid-break" style={{ marginTop: "14pt" }}>
+            <h2 style={{ fontSize: "12pt", margin: 0 }}>
+              Assistant&rsquo;s note
+              {m.urgency ? ` · ${URGENCY[m.urgency].label.toLowerCase()}` : ""}
+            </h2>
+            {m.assessment && (
+              <p style={{ margin: "4pt 0 0" }}>
+                <strong>Commonly investigated for:</strong> {m.assessment}
+              </p>
+            )}
+            {!!m.doctors?.length && (
+              <p style={{ margin: "4pt 0 0" }}>
+                <strong>Suggested department:</strong>{" "}
+                {[...new Set(m.doctors.map((d) => d.specialty))].join(", ")}
+              </p>
+            )}
+            {!!m.tests?.length && (
+              <p style={{ margin: "4pt 0 0" }}>
+                <strong>Tests suggested beforehand:</strong>{" "}
+                {m.tests.map((t) => `${t.name} (${t.code})`).join(", ")}
+              </p>
+            )}
+            {!!m.nextSteps?.length && (
+              <ul style={{ margin: "4pt 0 0", paddingLeft: "16pt" }}>
+                {m.nextSteps.map((step, n) => (
+                  <li key={n}>{step}</li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ),
+      )}
+
+      <p style={{ marginTop: "18pt", fontSize: "9pt" }}>
+        Meridian Health City · Reception +91 80 4000 1200 · Emergency +91 80 4000 1000.
+        This summary was generated on the patient&rsquo;s own device and was not stored by the
+        hospital.
+      </p>
+    </div>
   );
 }
 

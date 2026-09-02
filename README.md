@@ -109,10 +109,28 @@ The rate-limit boundary is verified by hand against a live database rather than 
 — it needs real Postgres, and the off-by-one it once had is now documented at the query
 itself in `lib/db.ts`.
 
+## The conversation stays on the device
+
+People remember symptoms in pieces — "I forgot to say the vision goes blurry too" is the
+normal case, not the exception. Follow-ups are treated as additions to the picture rather
+than a fresh start: the last six exchanges go back to the model, and each of its own turns
+carries a `[previously recommended: ...]` line so it builds on the department and tests it
+already settled on instead of quietly contradicting them.
+
+The transcript is held in `localStorage` and nowhere else. `app/api/chat/route.ts` writes
+nothing to the database — the only rows a chat produces are rate-limit counters keyed by IP.
+**Clear** removes the stored key outright, and a conversation of one greeting is never
+written at all, so clearing genuinely leaves nothing behind.
+
+**Save for your doctor** produces a one-page summary: the patient's own words in order, then
+what the assistant made of them, headed by a notice that it is patient-reported, unreviewed
+by any clinician, and not a medical record. It is the browser's own print-to-PDF — a
+`.print-sheet` element and a `@media print` block that hides its siblings, no PDF library.
+
 ## Not built
 
 No patient accounts, no booking history page, no real availability calendar (slots are
-generated), no chat transcript persistence, no streaming. This is a demo; each of those is a
+generated), no server-side chat storage, no streaming. This is a demo; each of those is a
 deliberate omission rather than an oversight.
 
 ## Disclaimer

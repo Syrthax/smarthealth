@@ -23,7 +23,9 @@ export async function POST(req: Request) {
   const messages = (body.messages ?? [])
     .filter((m) => (m?.role === "user" || m?.role === "assistant") && typeof m.content === "string")
     .map((m) => ({ role: m.role, content: m.content.slice(0, 1500) }))
-    .slice(-8);
+    // Six exchanges. Long enough that someone can add "I forgot to mention…" three
+    // times and still be understood; short enough to stay well inside the context window.
+    .slice(-12);
 
   const latest = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
   if (!latest.trim()) return Response.json({ error: "Say something first." }, { status: 400 });

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
+import Link from "next/link";
 import ChatWidget from "@/components/chat-widget";
 
 const plexSans = IBM_Plex_Sans({
@@ -52,33 +53,33 @@ function SiteNav() {
     <header className="sticky top-0 z-30 border-b border-rule bg-paper/95 backdrop-blur-[2px]">
       <nav aria-label="Primary" className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="flex items-center gap-4 py-3">
-          <a href="/" className="flex shrink-0 items-baseline gap-2">
+          <Link href="/" className="flex shrink-0 items-baseline gap-2">
             <span className="text-[15px] font-semibold tracking-tight">Meridian</span>
             <span className="hidden text-[13px] text-muted sm:inline">Health City</span>
-          </a>
+          </Link>
           <ul className="ml-auto hidden items-center gap-6 text-[14px] text-muted md:flex">
             {links.map((l) => (
               <li key={l.href}>
-                <a href={l.href} className="whitespace-nowrap hover:text-ink">
+                <Link href={l.href} className="whitespace-nowrap hover:text-ink">
                   {l.label}
-                </a>
+                </Link>
               </li>
             ))}
           </ul>
-          <a
+          <Link
             href="/doctors"
             className="ml-auto whitespace-nowrap rounded-ctl bg-accent px-3.5 py-2 text-[14px] font-medium text-paper transition-colors hover:bg-accent-hover active:translate-y-px md:ml-6"
           >
             Book a consultation
-          </a>
+          </Link>
         </div>
         {/* Same destinations on small screens — scrolls inside itself, never the page. */}
         <ul className="-mx-4 flex gap-5 overflow-x-auto px-4 pb-2.5 text-[14px] text-muted md:hidden">
           {links.map((l) => (
             <li key={l.href}>
-              <a href={l.href} className="whitespace-nowrap hover:text-ink">
+              <Link href={l.href} className="whitespace-nowrap hover:text-ink">
                 {l.label}
-              </a>
+              </Link>
             </li>
           ))}
         </ul>

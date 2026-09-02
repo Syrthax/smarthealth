@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DoctorCard, TestCard } from "./rec-card";
 import type { Doctor, Test } from "@/lib/chat";
 
@@ -17,6 +17,57 @@ type Msg = {
   tests?: Test[];
   emergency?: { why: string; line: string };
 };
+
+const REDUCED_MOTION = () =>
+  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * Reveals `text` a few characters at a time. Returns the visible slice and whether it
+ * has landed, so the caller can hold the cards back until the sentence finishes.
+ * Skipped entirely for reduced motion and for messages that are not the newest one.
+ */
+function useTypewriter(text: string, active: boolean, onGrow?: () => void) {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!active || REDUCED_MOTION()) return;
+    // ~55 chars a second: fast enough not to be a wait, slow enough to read along.
+    const id = setInterval(() => setCount((c) => (c >= text.length ? c : c + 2)), 36);
+    return () => clearInterval(id);
+  }, [text, active]);
+
+  useEffect(() => onGrow?.(), [count, onGrow]);
+
+  // Inactive messages — the opener, and anything the user has since replied past —
+  // render whole. Nothing has to be synced back into state when typing stops.
+  if (!active || REDUCED_MOTION()) return { shown: text, done: true };
+  return { shown: text.slice(0, count), done: count >= text.length };
+}
+
+const THINKING = [
+  "Reading what you have written",
+  "Matching it against our departments",
+  "Checking which tests are worth having ready",
+  "Putting your options together",
+];
+
+/** Cycles while the request is in flight. The phases are real; the timing is not. */
+function Thinking() {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setI((n) => Math.min(n + 1, THINKING.length - 1)), 1600);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <p aria-live="polite" className="flex items-center gap-2.5 text-[14px] text-muted">
+      <span
+        aria-hidden
+        className="spin inline-block h-3.5 w-3.5 shrink-0 rounded-full border-2 border-rule border-t-accent"
+      />
+      {THINKING[i]}…
+    </p>
+  );
+}
 
 /** How soon to be seen. Colour carries the same message as the words, never alone. */
 const URGENCY: Record<Urgency, { label: string; note: string; cls: string }> = {
@@ -56,12 +107,18 @@ export default function ChatWidget() {
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Called on every typed chunk as well as on every new message, so the panel keeps
+  // pace with text that is still arriving.
+  const stickToBottom = useCallback(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, []);
+
   useEffect(() => {
     if (open) {
-      endRef.current?.scrollIntoView({ block: "end" });
+      stickToBottom();
       inputRef.current?.focus();
     }
-  }, [open, messages]);
+  }, [open, messages, stickToBottom]);
 
   useEffect(() => {
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
@@ -146,95 +203,17 @@ export default function ChatWidget() {
                   {m.content}
                 </p>
               ) : (
-                <div key={i} className="rise-in space-y-3">
-                  {m.urgency && <UrgencyBar urgency={m.urgency} />}
-
-                  <p className="text-[14px]">{m.content}</p>
-
-                  {m.assessment && (
-                    <section className="rounded-card border border-rule bg-surface px-3 py-2.5">
-                      <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
-                        What this is usually looked at for
-                      </h3>
-                      <p className="mt-1 text-[14px]">{m.assessment}</p>
-                      <p className="mt-2 text-[12px] text-muted">
-                        This is not a diagnosis. Only the doctor who examines you can give you one.
-                      </p>
-                    </section>
-                  )}
-
-                  {!!m.nextSteps?.length && (
-                    <section>
-                      <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
-                        What to do now
-                      </h3>
-                      <ol className="mt-1.5 space-y-1.5">
-                        {m.nextSteps.map((step, n) => (
-                          <li key={n} className="flex gap-2.5 text-[14px]">
-                            <span
-                              aria-hidden
-                              className="mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-accent-wash font-mono text-[11px] text-accent"
-                            >
-                              {n + 1}
-                            </span>
-                            <span>{step}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </section>
-                  )}
-
-                  {m.emergency && (
-                    <a
-                      href={`tel:${m.emergency.line.replace(/\s/g, "")}`}
-                      className="block rounded-ctl bg-alert px-3 py-2.5 text-center text-[14px] font-medium text-paper active:translate-y-px"
-                    >
-                      Call {m.emergency.line}
-                    </a>
-                  )}
-
-                  {m.outOfScope && !m.doctors?.length && (
-                    <a
-                      href="tel:+918040001200"
-                      className="block rounded-ctl border border-rule px-3 py-2.5 text-center text-[14px] font-medium hover:bg-surface active:translate-y-px"
-                    >
-                      Call reception · +91 80 4000 1200
-                    </a>
-                  )}
-
-                  {!!m.doctors?.length && (
-                    <section className="space-y-2">
-                      <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
-                        {m.outOfScope ? "Your way in" : "Who to see"}
-                      </h3>
-                      {m.doctors.map((d) => (
-                        <DoctorCard key={d.id} doctor={d} />
-                      ))}
-                    </section>
-                  )}
-
-                  {!!m.tests?.length && (
-                    <section className="space-y-2">
-                      <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
-                        Worth having ready
-                      </h3>
-                      <p className="text-[12px] text-muted">
-                        Having these done before the appointment often saves a second visit. The
-                        doctor decides what is actually needed.
-                      </p>
-                      {m.tests.map((t) => (
-                        <TestCard key={t.id} test={t} />
-                      ))}
-                    </section>
-                  )}
-                </div>
+                <AssistantMessage
+                  key={i}
+                  message={m}
+                  // The opener is already on screen when the panel opens; only a freshly
+                  // arrived answer types itself out.
+                  typing={i > 0 && i === messages.length - 1}
+                  onGrow={stickToBottom}
+                />
               ),
             )}
-            {busy && (
-              <p aria-live="polite" className="text-[14px] text-muted">
-                Checking the directory…
-              </p>
-            )}
+            {busy && <Thinking />}
             <div ref={endRef} />
           </div>
 
@@ -251,7 +230,7 @@ export default function ChatWidget() {
                 }
               }}
               placeholder="What have you been feeling, and for how long?"
-              aria-label="Describe your symptoms"
+              aria-label="What have you been feeling, and for how long?"
               className="w-full resize-none rounded-ctl border border-rule bg-paper px-3 py-2 text-[14px] outline-none focus:border-accent"
             />
             <button
@@ -265,6 +244,120 @@ export default function ChatWidget() {
         </section>
       )}
     </>
+  );
+}
+
+function AssistantMessage({
+  message: m,
+  typing,
+  onGrow,
+}: {
+  message: Msg;
+  typing: boolean;
+  onGrow: () => void;
+}) {
+  const { shown, done } = useTypewriter(m.content, typing, onGrow);
+
+  // Everything below the sentence waits for it to finish, then cascades in. Each
+  // section is one step further down the stagger.
+  let step = 0;
+  const after = () => ({ animationDelay: `${step++ * 70}ms` });
+
+  return (
+    <div className="rise-in space-y-3">
+      {m.urgency && <UrgencyBar urgency={m.urgency} />}
+
+      <p className="text-[14px]">
+        {shown}
+        {!done && <span aria-hidden className="caret" />}
+      </p>
+
+      {done && (
+        <>
+          {m.assessment && (
+            <section
+              style={after()}
+              className="rise-in rounded-card border border-rule bg-surface px-3 py-2.5"
+            >
+              <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
+                What this is usually looked at for
+              </h3>
+              <p className="mt-1 text-[14px]">{m.assessment}</p>
+              <p className="mt-2 text-[12px] text-muted">
+                This is not a diagnosis. Only the doctor who examines you can give you one.
+              </p>
+            </section>
+          )}
+
+          {!!m.nextSteps?.length && (
+            <section style={after()} className="rise-in">
+              <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
+                What to do now
+              </h3>
+              <ol className="mt-1.5 space-y-1.5">
+                {m.nextSteps.map((stepText, n) => (
+                  <li key={n} className="flex gap-2.5 text-[14px]">
+                    <span
+                      aria-hidden
+                      className="mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-accent-wash font-mono text-[11px] text-accent"
+                    >
+                      {n + 1}
+                    </span>
+                    <span>{stepText}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {m.emergency && (
+            <a
+              style={after()}
+              href={`tel:${m.emergency.line.replace(/\s/g, "")}`}
+              className="rise-in block rounded-ctl bg-alert px-3 py-2.5 text-center text-[14px] font-medium text-paper active:translate-y-px"
+            >
+              Call {m.emergency.line}
+            </a>
+          )}
+
+          {m.outOfScope && !m.doctors?.length && (
+            <a
+              style={after()}
+              href="tel:+918040001200"
+              className="rise-in block rounded-ctl border border-rule px-3 py-2.5 text-center text-[14px] font-medium hover:bg-surface active:translate-y-px"
+            >
+              Call reception · +91 80 4000 1200
+            </a>
+          )}
+
+          {!!m.doctors?.length && (
+            <section style={after()} className="rise-in space-y-2">
+              <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
+                {m.outOfScope ? "Your way in" : "Who to see"}
+              </h3>
+              {m.doctors.map((d) => (
+                <DoctorCard key={d.id} doctor={d} />
+              ))}
+            </section>
+          )}
+
+          {!!m.tests?.length && (
+            <section style={after()} className="rise-in space-y-2">
+              <h3 className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
+                Worth having ready
+              </h3>
+              <p className="text-[12px] text-muted">
+                Having these done before the appointment often saves a second visit. The doctor
+                decides what is actually needed.
+              </p>
+              {m.tests.map((t) => (
+                <TestCard key={t.id} test={t} />
+              ))}
+            </section>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

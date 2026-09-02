@@ -7,6 +7,16 @@ type Target = { kind: "doctor" | "test" | "referral"; refId: number; title: stri
 
 const STORE_KEY = "mhc.patient";
 
+/** Whatever we saved last time. Storage can be blocked or empty; both mean "start fresh". */
+function remembered(): { name: string; phone: string } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}");
+    return { name: saved.name ?? "", phone: saved.phone ?? "" };
+  } catch {
+    return { name: "", phone: "" };
+  }
+}
+
 /** Next six outpatient slots, Sunday excluded. ponytail: no real availability table in the demo. */
 function nextSlots(): string[] {
   const times = ["09:30", "11:00", "15:30", "17:00"];
@@ -123,8 +133,10 @@ export function TestCard({ test }: { test: Test }) {
 function BookingDialog({ target, onClose }: { target: Target; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [slots] = useState(nextSlots);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  // Read once during the first render. The dialog only ever mounts on the client
+  // (it is behind an open flag), so there is no server/client mismatch to worry about.
+  const [name, setName] = useState(() => remembered().name);
+  const [phone, setPhone] = useState(() => remembered().phone);
   const [slot, setSlot] = useState(slots[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,13 +144,6 @@ function BookingDialog({ target, onClose }: { target: Target; onClose: () => voi
 
   useEffect(() => {
     ref.current?.showModal();
-    try {
-      const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}");
-      if (saved.name) setName(saved.name);
-      if (saved.phone) setPhone(saved.phone);
-    } catch {
-      /* first visit, or storage blocked — the form just starts empty */
-    }
   }, []);
 
   async function submit(e: React.FormEvent) {

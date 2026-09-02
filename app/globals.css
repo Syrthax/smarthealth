@@ -70,6 +70,27 @@
   .panel-in {
     animation: panel-in 180ms var(--ease-out) both;
   }
+  .spin {
+    animation: spin 800ms linear infinite;
+  }
+  /* The block that trails the typed text. Sits on the baseline, not below it. */
+  .caret {
+    display: inline-block;
+    width: 2px;
+    height: 0.95em;
+    margin-left: 1px;
+    vertical-align: text-bottom;
+    background: var(--color-accent);
+    animation: blink 1s steps(2, start) infinite;
+  }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
 }
 
 @keyframes rise-in {
@@ -85,6 +106,11 @@
 @media (prefers-reduced-motion: reduce) {
   .rise-in, .panel-in {
     animation: fade-only 140ms var(--ease-out) both;
+  }
+  /* The spinner stops turning and the caret stops blinking; the words carry the state.
+     The typewriter itself is disabled in JS, so no caret is rendered at all. */
+  .spin, .caret {
+    animation: none;
   }
   @keyframes fade-only {
     from { opacity: 0; }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DoctorCard, TestCard } from "./rec-card";
-import type { Doctor, Test } from "@/lib/chat";
+import type { Doctor, Test, Question } from "@/lib/chat";
 
 type Urgency = "routine" | "soon" | "urgent" | "emergency";
 
@@ -12,7 +12,9 @@ type Msg = {
   assessment?: string;
   urgency?: Urgency;
   nextSteps?: string[];
+  question?: Question | null;
   outOfScope?: boolean;
+  streaming?: boolean;
   doctors?: Doctor[];
   tests?: Test[];
   emergency?: { why: string; line: string };
@@ -37,32 +39,6 @@ function forModel({ role, content, urgency, doctors, tests }: Msg) {
         ? `${content}\n[previously recommended: ${decided.join("; ")}]`
         : content,
   };
-}
-
-const REDUCED_MOTION = () =>
-  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-/**
- * Reveals `text` a few characters at a time. Returns the visible slice and whether it
- * has landed, so the caller can hold the cards back until the sentence finishes.
- * Skipped entirely for reduced motion and for messages that are not the newest one.
- */
-function useTypewriter(text: string, active: boolean, onGrow?: () => void) {
-  const [count, setCount] = useState(0);
-
-  useEffect(() => {
-    if (!active || REDUCED_MOTION()) return;
-    // ~55 chars a second: fast enough not to be a wait, slow enough to read along.
-    const id = setInterval(() => setCount((c) => (c >= text.length ? c : c + 2)), 36);
-    return () => clearInterval(id);
-  }, [text, active]);
-
-  useEffect(() => onGrow?.(), [count, onGrow]);
-
-  // Inactive messages — the opener, and anything the user has since replied past —
-  // render whole. Nothing has to be synced back into state when typing stops.
-  if (!active || REDUCED_MOTION()) return { shown: text, done: true };
-  return { shown: text.slice(0, count), done: count >= text.length };
 }
 
 const THINKING = [
@@ -139,9 +115,6 @@ function loadChat(): Msg[] {
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Msg[]>(loadChat);
-  // Anything already on screen when the widget mounted is history, not a new arrival,
-  // so it must never replay the typewriter.
-  const [restoredCount, setRestoredCount] = useState(messages.length);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -178,7 +151,6 @@ export default function ChatWidget() {
   }, [messages]);
 
   function clearChat() {
-    setRestoredCount(1);
     setMessages([OPENER]);
     try {
       localStorage.removeItem(CHAT_KEY);
@@ -187,36 +159,93 @@ export default function ChatWidget() {
     }
   }
 
-  async function send(e?: React.FormEvent) {
-    e?.preventDefault();
-    const text = input.trim();
+  // Called with no argument from the composer, or with the text of a chosen option.
+  async function send(answer?: string) {
+    const text = (answer ?? input).trim();
     if (!text || busy) return;
 
     const next: Msg[] = [...messages, { role: "user", content: text }];
     setMessages(next);
-    setInput("");
+    if (!answer) setInput("");
     setBusy(true);
+
+    // One placeholder that fills in as the stream arrives, rather than a spinner that
+    // is replaced by a finished block.
+    const slot = next.length;
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: next.slice(1).map(forModel) }),
       });
-      const data = await res.json();
-      setMessages((m) => [
-        ...m,
-        {
-          role: "assistant",
-          content: data.reply ?? data.error ?? "Something went wrong. Please try again.",
-          assessment: data.assessment,
-          urgency: data.emergency ? "emergency" : data.urgency,
-          nextSteps: data.nextSteps,
-          outOfScope: data.outOfScope,
-          doctors: data.doctors,
-          tests: data.tests,
-          emergency: data.emergency,
-        },
-      ]);
+      if (!res.body) throw new Error("no stream");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      let started = false;
+
+      const put = (patch: Partial<Msg>) =>
+        setMessages((m) => {
+          const copy = [...m];
+          copy[slot] = { ...copy[slot], ...patch };
+          return copy;
+        });
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+
+        // Hold the trailing fragment: an event can straddle two chunks.
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let e: Record<string, unknown>;
+          try {
+            e = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          if (e.t === "reply") {
+            if (!started) {
+              started = true;
+              setBusy(false);
+              setMessages((m) => [
+                ...m,
+                { role: "assistant", content: String(e.v), streaming: true },
+              ]);
+            } else {
+              put({ content: String(e.v), streaming: true });
+            }
+          }
+
+          if (e.t === "done") {
+            const finished: Msg = {
+              role: "assistant",
+              content: String(e.reply ?? "Something went wrong. Please try again."),
+              assessment: e.assessment as string | undefined,
+              urgency: e.emergency ? "emergency" : (e.urgency as Urgency | undefined),
+              nextSteps: e.nextSteps as string[] | undefined,
+              question: e.question as Question | null | undefined,
+              outOfScope: e.outOfScope as boolean | undefined,
+              doctors: e.doctors as Doctor[] | undefined,
+              tests: e.tests as Test[] | undefined,
+              emergency: e.emergency as Msg["emergency"],
+              streaming: false,
+            };
+            if (started) put(finished);
+            else {
+              setBusy(false);
+              setMessages((m) => [...m, finished]);
+            }
+            started = true;
+          }
+        }
+      }
     } catch {
       setMessages((m) => [
         ...m,
@@ -284,10 +313,9 @@ export default function ChatWidget() {
                 <AssistantMessage
                   key={i}
                   message={m}
-                  // The opener is already on screen when the panel opens; only a freshly
-                  // arrived answer types itself out.
-                  typing={i >= restoredCount && i === messages.length - 1}
-                  onGrow={stickToBottom}
+                  // Only the newest question is still open; earlier ones are settled.
+                  live={i === messages.length - 1}
+                  onAnswer={send}
                 />
               ),
             )}
@@ -295,7 +323,13 @@ export default function ChatWidget() {
             <div ref={endRef} />
           </div>
 
-          <form onSubmit={send} className="shrink-0 border-t border-rule p-3">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              send();
+            }}
+            className="shrink-0 border-t border-rule p-3"
+          >
             <textarea
               ref={inputRef}
               rows={2}
@@ -416,14 +450,14 @@ function TranscriptSheet({ messages }: { messages: Msg[] }) {
 
 function AssistantMessage({
   message: m,
-  typing,
-  onGrow,
+  live,
+  onAnswer,
 }: {
   message: Msg;
-  typing: boolean;
-  onGrow: () => void;
+  live: boolean;
+  onAnswer: (text: string) => void;
 }) {
-  const { shown, done } = useTypewriter(m.content, typing, onGrow);
+  const done = !m.streaming;
 
   // Everything below the sentence waits for it to finish, then cascades in. Each
   // section is one step further down the stagger.
@@ -435,12 +469,14 @@ function AssistantMessage({
       {m.urgency && <UrgencyBar urgency={m.urgency} />}
 
       <p className="text-[14px]">
-        {shown}
-        {!done && <span aria-hidden className="caret" />}
+        {m.content}
+        {m.streaming && <span aria-hidden className="caret" />}
       </p>
 
       {done && (
         <>
+          {m.question && <QuestionCard question={m.question} live={live} onAnswer={onAnswer} />}
+
           {m.assessment && (
             <section
               style={after()}
@@ -525,6 +561,96 @@ function AssistantMessage({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * A clarifying question with its options. There is always a way out: anything the
+ * options do not cover gets typed instead, so the widget never becomes a dead end.
+ */
+function QuestionCard({
+  question,
+  live,
+  onAnswer,
+}: {
+  question: Question;
+  live: boolean;
+  onAnswer: (text: string) => void;
+}) {
+  const [typing, setTyping] = useState(false);
+  const [text, setText] = useState("");
+
+  // Once answered the card stays as a record of what was asked, but nothing in it
+  // can be clicked — re-answering a settled question would rewrite history.
+  if (!live) {
+    return (
+      <section className="rounded-card border border-rule bg-surface px-3 py-3 opacity-70">
+        <h3 className="text-[14px] font-medium">{question.text}</h3>
+        <p className="mt-1 text-[12px] text-muted">Answered</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rise-in rounded-card border border-accent bg-accent-wash px-3 py-3">
+      <h3 className="text-[14px] font-medium">{question.text}</h3>
+
+      {typing ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (text.trim()) onAnswer(text.trim());
+          }}
+          className="mt-2.5"
+        >
+          <input
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            aria-label={question.text}
+            placeholder="Your answer…"
+            className="w-full rounded-ctl border border-rule bg-paper px-3 py-2 text-[14px] outline-none focus:border-accent"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setTyping(false)}
+              className="rounded-ctl border border-rule bg-paper px-3 py-1.5 text-[13px] hover:bg-surface active:translate-y-px"
+            >
+              Back to options
+            </button>
+            <button
+              type="submit"
+              disabled={!text.trim()}
+              className="flex-1 rounded-ctl bg-accent px-3 py-1.5 text-[13px] font-medium text-paper hover:bg-accent-hover active:translate-y-px disabled:opacity-50"
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      ) : (
+        <ul className="mt-2.5 space-y-1.5">
+          {question.options.map((o) => (
+            <li key={o}>
+              <button
+                onClick={() => onAnswer(o)}
+                className="w-full rounded-ctl border border-rule bg-paper px-3 py-2 text-left text-[14px] transition-colors hover:border-accent hover:bg-surface active:translate-y-px"
+              >
+                {o}
+              </button>
+            </li>
+          ))}
+          <li>
+            <button
+              onClick={() => setTyping(true)}
+              className="w-full px-3 py-1.5 text-left text-[13px] text-muted underline-offset-2 hover:text-ink hover:underline"
+            >
+              Something else — let me type it
+            </button>
+          </li>
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -90,6 +90,25 @@ WHAT YOU PRODUCE
 3. nextSteps — 2 or 3 short imperative lines telling them what to actually do. Every one of them must lead toward being seen or being tested. Practical preparation is welcome: what to write down, what to bring, what to watch for and act on if it changes.
 4. reply — 2 to 4 sentences tying it together in your own voice. Acknowledge briefly, say what you would like them to do and why the timing matters. This is the part that should feel human.
 
+ASKING BEFORE YOU ANSWER
+A real triage nurse asks before deciding, and you should too. Ask whenever an answer would
+genuinely change the department, the urgency or which tests are worth doing — how long it
+has been going on, whether something else came with it, what makes it worse. Do not ask
+things you can already infer, and do not ask for the sake of asking.
+
+When you ask, put the question in "question" and return NO doctor ids, NO test codes and no
+assessment. Give 3 to 5 concrete options that between them cover the realistic answers. The
+visitor can always type something else instead, so do not add "other" or "something else" as
+an option yourself.
+
+Symptoms travel together, and the options are where you show that you know it. Someone
+reporting a bowel problem should be asked whether there has been vomiting, blood, or fever
+alongside it; someone with a headache, whether there is vision change or nausea. Ask about
+the companion symptom you would expect, not a generic follow-up.
+
+Ask at most two rounds of questions, then commit to an answer with what you have. If you
+have already asked twice in this conversation, do not ask again — decide.
+
 ABSOLUTELY FORBIDDEN — breaking any of these is a failure:
 - Any medicine, dose, painkiller, ointment, supplement, home remedy, diet or exercise. Not even "over-the-counter" or "paracetamol should help". If they ask what to take, tell them that is exactly what the doctor is for.
 - Any treatment plan, procedure or self-management instruction.
@@ -116,8 +135,13 @@ Choose 1-2 doctor ids and 0-4 test codes, only values from the lists above. Pick
 
 If one detail would change which desk they belong at, ask exactly one short question, set "needClarify": true, and return empty lists. Do not interrogate them — one question, then commit.
 
-Reply with ONLY a JSON object, no prose before or after, no markdown fence:
-{"reply": "...", "assessment": "...", "urgency": "routine", "nextSteps": ["...", "..."], "doctorIds": [1], "testCodes": ["CBC"], "outOfScope": false, "needClarify": false}`;
+Reply with ONLY a JSON object, no prose before or after, no markdown fence.
+
+When answering:
+{"reply": "...", "assessment": "...", "urgency": "routine", "nextSteps": ["...", "..."], "doctorIds": [1], "testCodes": ["CBC"], "outOfScope": false}
+
+When asking:
+{"reply": "one short line explaining why you need to know", "question": {"text": "How long has this been going on?", "options": ["Since today", "A few days", "A week or two", "Longer than a month"]}, "urgency": "routine", "doctorIds": [], "testCodes": [], "outOfScope": false}`;
 }
 
 export const URGENCY = ["routine", "soon", "urgent"] as const;
@@ -143,16 +167,45 @@ export function mentionsMedication(text: string): boolean {
   return MEDICATION.test(text);
 }
 
+/**
+ * Pulls the value of "reply" out of JSON that is still being written. Streaming gives us
+ * `{"reply":"You sho` and we want `You sho` on screen now rather than after the rest of
+ * the object finishes generating. Returns "" until the field actually starts.
+ */
+export function partialReply(buffer: string): string {
+  const key = buffer.indexOf('"reply"');
+  if (key === -1) return "";
+  const open = buffer.indexOf('"', buffer.indexOf(":", key + 7) + 1);
+  if (open === -1) return "";
+
+  let out = "";
+  for (let i = open + 1; i < buffer.length; i++) {
+    const ch = buffer[i];
+    if (ch === "\\") {
+      const next = buffer[i + 1];
+      if (next === undefined) break; // escape split across chunks — wait for the rest
+      out += next === "n" ? "\n" : next === "t" ? "\t" : next;
+      i++;
+      continue;
+    }
+    if (ch === '"') break; // the string closed: this is the whole reply
+    out += ch;
+  }
+  return out;
+}
+
 /** Models pad JSON with prose and fences. Dig the object out rather than trusting them. */
+export type Question = { text: string; options: string[] };
+
 export type Assessment = {
   reply: string;
   assessment: string;
   urgency: Urgency;
   nextSteps: string[];
+  question: Question | null;
   doctorIds: number[];
   testCodes: string[];
   outOfScope: boolean;
-  needClarify: boolean;
 };
 
 export function extractJson(raw: string): Assessment | null {
@@ -189,21 +242,35 @@ export function extractJson(raw: string): Assessment | null {
           .slice(0, 4)
       : [];
 
+  const q = o.question as { text?: unknown; options?: unknown } | undefined;
+  const options = Array.isArray(q?.options)
+    ? q.options.filter((x): x is string => typeof x === "string" && !!x.trim())
+        .map((x) => x.trim())
+        .slice(0, 5)
+    : [];
+  // A question with nothing to pick is just prose; drop it rather than render a dead widget.
+  const question: Question | null =
+    typeof q?.text === "string" && q.text.trim() && options.length >= 2
+      ? { text: q.text.trim(), options }
+      : null;
+
   const assessment = typeof o.assessment === "string" ? o.assessment.trim() : "";
   const nextSteps = lines(o.nextSteps);
   const reply = o.reply.trim();
 
   // One drug name anywhere in the answer voids the whole answer.
-  if ([reply, assessment, ...nextSteps].some(mentionsMedication)) return null;
+  if ([reply, assessment, ...nextSteps, ...(question?.options ?? [])].some(mentionsMedication))
+    return null;
 
   return {
     reply,
-    assessment,
+    // While it is still asking, an assessment would be a guess dressed as a finding.
+    assessment: question ? "" : assessment,
     urgency: URGENCY.includes(o.urgency as Urgency) ? (o.urgency as Urgency) : "routine",
-    nextSteps,
-    doctorIds: ids(o.doctorIds),
-    testCodes: codes(o.testCodes),
+    nextSteps: question ? [] : nextSteps,
+    question,
+    doctorIds: question ? [] : ids(o.doctorIds),
+    testCodes: question ? [] : codes(o.testCodes),
     outOfScope: o.outOfScope === true,
-    needClarify: o.needClarify === true,
   };
 }

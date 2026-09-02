@@ -45,9 +45,21 @@ export async function POST(req: Request) {
   if (exists.length === 0) return Response.json({ error: "Unknown item." }, { status: 400 });
 
   const code = refCode();
-  await sql`
-    INSERT INTO bookings (kind, ref_id, patient_name, phone, slot, ref_code)
-    VALUES (${kind}, ${refId}, ${name}, ${phone}, ${slot}, ${code})
-  `;
+  try {
+    await sql`
+      INSERT INTO bookings (kind, ref_id, patient_name, phone, slot, ref_code)
+      VALUES (${kind}, ${refId}, ${name}, ${phone}, ${slot}, ${code})
+    `;
+  } catch (err) {
+    // Let the unique index be the arbiter rather than a check-then-insert, which
+    // would still let two requests through if they raced.
+    if ((err as { code?: string })?.code === "23505") {
+      return Response.json(
+        { error: "Someone has just taken that slot. Please choose another one." },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
   return Response.json({ refCode: code });
 }

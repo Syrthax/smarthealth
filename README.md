@@ -49,6 +49,11 @@ models ground poorly on bare integers.
 **Both API routes are rate limited** — 20 chat messages and 5 bookings per hour per IP,
 counted in Postgres rather than Redis so there is no second service to run.
 
+**A consultation slot belongs to one patient.** A partial unique index on `(ref_id, slot)
+WHERE kind = 'doctor'` lets the database arbitrate, rather than a check-then-insert that
+would still let two simultaneous requests through. Labs run tests in parallel, so the
+constraint is deliberately scoped to consultations and not to every booking.
+
 ## Stack
 
 Next.js 16 (App Router) · Neon Postgres · Featherless AI · Tailwind v4.
@@ -108,6 +113,32 @@ lists.
 The rate-limit boundary is verified by hand against a live database rather than in `npm test`
 — it needs real Postgres, and the off-by-one it once had is now documented at the query
 itself in `lib/db.ts`.
+
+## It asks before it answers
+
+A triage nurse asks questions, so the assistant does too. When an answer would genuinely
+change the department, the urgency or which tests are worth doing, it returns a `question`
+instead of a recommendation — three to five concrete options, rendered as buttons, with a
+**Something else — let me type it** escape hatch so the widget is never a dead end.
+
+The options are where it shows it knows how symptoms travel: a bowel complaint gets asked
+about blood, vomiting and fever; a headache gets asked about vision changes and duration.
+`extractJson` enforces that asking and answering are mutually exclusive — a response that
+tries to do both has its recommendation stripped, because recommending while still asking is
+a contradiction. It commits after two rounds. Answered questions stay on screen as a record
+but stop being clickable.
+
+## The reply streams
+
+The route returns newline-delimited JSON: `reply` events carrying the prose as it generates,
+then one `done` event with the finished, DB-hydrated answer. Because the model writes
+`reply` first, text starts appearing at ~3s instead of ~7s, and the cards arrive when the
+rest of the object finishes.
+
+`partialReply()` pulls the reply out of JSON that is still being written — it handles escaped
+quotes, newlines, and a backslash that arrives as the last byte of a chunk. Every path,
+including the emergency short-circuit and the rate limiter, emits the same event shape, so
+the client has one code path for all of them.
 
 ## The conversation stays on the device
 

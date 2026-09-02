@@ -51,6 +51,11 @@ CREATE TABLE bookings (
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 
+-- A doctor sees one patient per slot. Labs run several tests in parallel, so the
+-- constraint is deliberately scoped to consultations rather than every booking.
+CREATE UNIQUE INDEX one_patient_per_consultation
+  ON bookings (ref_id, slot) WHERE kind = 'doctor';
+
 CREATE TABLE api_hits (
   ip    text NOT NULL,
   route text NOT NULL,

@@ -55,3 +55,30 @@ test("voice and text share one deterministic emergency answer", () => {
   assert.deepEqual([e.doctors, e.tests], [[], []]);
   assert.ok(OUT_OF_SCOPE_REPLY.includes("+91 80 4000 1200"));
 });
+
+test("stray transcribed noise is recognised, real short answers are not", async () => {
+  const { soundsLikeNoise, askedForName } = await import("../lib/voice.ts");
+  for (const noise of ["c'est", "Chantilly", "", "  ", "...", "hmm", "la la", "¿qué?"])
+    assert.ok(soundsLikeNoise(noise), `should be noise: "${noise}"`);
+  for (const answer of [
+    "yes", "No", "about a week", "2 days", "since Monday", "gradually", "Suddenly",
+    "evenings", "nausea", "none", "my knee", "haan", "fever too", "the first one", "98765 43210",
+    "It started when I was at work",
+  ])
+    assert.equal(soundsLikeNoise(answer), false, `should be an answer: "${answer}"`);
+  assert.ok(askedForName("Could I have the patient's full name, please?"));
+  assert.equal(askedForName("How long have you had the headache?"), false);
+});
+
+test("appended disclaimers are cut, the recommendation is kept", async () => {
+  const { stripDisclaimer } = await import("../lib/voice.ts");
+  const said =
+    "This could be indigestion. I'd recommend seeing Dr. Rohit Nambiar in Gastroenterology this week. Shall we look at slots? This information is not medical advice or diagnosis. Please see a healthcare professional or seek care.";
+  const r = stripDisclaimer(said);
+  assert.ok(r.found);
+  assert.ok(r.text.includes("Dr. Rohit Nambiar"));
+  assert.ok(r.text.includes("Shall we look at slots?"));
+  assert.ok(!/medical advice/i.test(r.text));
+  assert.ok(!/healthcare professional/i.test(r.text), r.text);
+  assert.equal(stripDisclaimer("I'd recommend seeing a neurologist this week.").found, false);
+});

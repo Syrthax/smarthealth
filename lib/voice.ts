@@ -111,6 +111,7 @@ When the patient mentions a symptom, do not jump to an answer. Ask, one short qu
   1. How long has it been going on — and did it come on suddenly or gradually?
   2. When does it happen, or what brings it on or makes it worse — time of day, light, food, exertion, lying down?
   3. What else have they noticed alongside it — ask about the specific companion symptoms that go with this complaint, including ones they may not think matter. For a headache: any fever, does light or noise bother them, any nausea, any change in vision, a stiff neck. For stomach pain: vomiting, blood, fever, change in bowel habit. For a cough: fever, breathlessness, blood, weight loss.
+Only move on when the question you asked has actually been answered. If what you hear does not answer it — a stray word, a fragment in another language, a name or noise from a TV or someone else in the room — do not thank them and do not move on: say you did not quite catch that, and ask the same question again, more simply. The page may also tell you that something was background noise; when it does, ask again.
 Skip anything they already told you. Acknowledge each answer in a few words, but give no opinion while you are asking. Once you have all three, say "Thank you — give me a moment" and call assess_symptoms with everything they told you.
 
 THE CONCLUSION IS assess_symptoms', NOT YOURS
@@ -120,7 +121,8 @@ THE CONCLUSION IS assess_symptoms', NOT YOURS
   what it could be — from its assessment, exactly as tentative as it is ("This could be a migraine, or possibly a tension-type headache");
   who to see and how soon — name the doctor and department it returned ("I'd recommend seeing Dr. Meera Krishnan in Neurology this week");
   what to prepare for — the tests it returned, and any preparation from get_test_cost if they ask.
-  Then offer to book.
+  Then offer to book. That is the whole answer — nothing after it.
+- Never tack on a disclaimer. Do not say "this is not medical advice", "not a diagnosis", "always see a healthcare professional", "I am not a doctor" or anything like them — naming the doctor and how soon to see them already is the advice to seek professional care.
 - Add nothing medical of your own on top: no extra causes, no reassurance, no likelihoods.
 - If it returned degraded or rateLimited, say what its reply says and offer the doctor directory or reception.
 - Never mention any medicine, dose, remedy, ointment, supplement, diet or treatment. If asked what to take, say warmly that the doctor will sort that out once they have examined them, and offer to book.
@@ -165,4 +167,70 @@ export function patientAgreed(words: string): boolean {
 export function medicationBreach(spoken: string, grounded: string): string | null {
   const allowed = grounded.toLowerCase();
   return medicationTerms(spoken).find((term) => !allowed.includes(term)) ?? null;
+}
+
+/**
+ * Words that make a one- or two-word reply a real answer to a triage question: yes/no,
+ * durations, times, frequencies, body parts, common symptoms, and the small words people
+ * answer with. Anything with a digit counts too ("2 days", a phone number).
+ */
+const MEANINGFUL = new RegExp(
+  "\\b(" +
+    [
+      "yes|yeah|yep|yup|no|nope|nah|ok|okay|sure|right|correct|fine|haan|ha|ji|nahi|theek",
+      "none|nothing|neither|both|all|not|never|always|sometimes|often|rarely|once|twice|constant|constantly|on and off",
+      "today|yesterday|tonight|morning|mornings|afternoon|afternoons|evening|evenings|night|nights|daily|weekend",
+      "hour|hours|day|days|week|weeks|month|months|year|years|since|ago|recently|while|long|few|couple|little|bit|lot",
+      "monday|tuesday|wednesday|thursday|friday|saturday|sunday",
+      "one|two|three|four|five|six|seven|eight|nine|ten|first|second|third|last|next",
+      "sudden|suddenly|gradual|gradually|slowly|quickly|worse|better|same|bad|mild|severe|sharp|dull|throbbing",
+      "head|stomach|tummy|chest|back|neck|knee|knees|leg|legs|arm|arms|eye|eyes|ear|ears|throat|nose|skin|tooth|teeth|foot|feet|hand|hands|joint|joints",
+      "pain|ache|aches|hurts|hurt|sore|fever|nausea|nauseous|vomit|vomiting|dizzy|dizziness|headache|cough|cold|tired|fatigue|rash|itch|itchy|swelling|bleeding|blood|burning",
+      "light|noise|food|eating|meals|stress|work|exercise|walking|running|lying|sitting|standing|sleep|screens|screen",
+      "doctor|dr|test|book|cancel|repeat|again|pardon|sorry|what|wait|stop|hello|hi",
+    ].join("|") +
+    ")\\b|\\d|हाँ|हां|नहीं|ठीक",
+  "i",
+);
+
+/**
+ * Background noise dressed up as an answer. Automatic transcription turns a TV, a
+ * conversation across the room or a clatter into words — "c'est", "Chantilly" — and a
+ * model will happily thank the patient for them and move on. A short utterance that
+ * carries none of the words a real answer would is treated as noise. Three or more words
+ * are always let through: that is a sentence, and whether it answers the question is the
+ * agent's call.
+ */
+export function soundsLikeNoise(text: string): boolean {
+  const words = text
+    .trim()
+    .split(/\s+/)
+    .filter((w) => /[\p{L}\p{N}]/u.test(w));
+  if (words.length === 0) return true;
+  if (words.length >= 3) return false;
+  return !MEANINGFUL.test(text);
+}
+
+/** When the agent has just asked for a name, a short unfamiliar reply is the answer, not noise. */
+export function askedForName(agentSaid: string): boolean {
+  return /\b(your name|full name|patient's name|name please|spell|who is the (appointment|booking) for|booked under)\b/i.test(agentSaid);
+}
+
+/**
+ * Boilerplate the agent sometimes appends of its own accord — "this is not medical advice,
+ * please see a healthcare professional". The instructions forbid it; this catches it when
+ * they are ignored, so the page can cut it from the transcript and stop the audio.
+ */
+const DISCLAIMER =
+  /[^.?!]*\b(not (medical advice|a (medical )?diagnosis|a substitute)|(see|consult|speak (to|with)) (a|your) (healthcare|medical|health care) (professional|provider)|i('| a)m not a doctor)\b[^.?!]*[.?!]?/i;
+
+/** The transcript with any disclaimer sentence removed, and whether one was found. */
+export function stripDisclaimer(text: string): { text: string; found: boolean } {
+  let out = text;
+  let found = false;
+  for (let m = DISCLAIMER.exec(out); m; m = DISCLAIMER.exec(out)) {
+    found = true;
+    out = out.slice(0, m.index) + out.slice(m.index + m[0].length);
+  }
+  return { text: out.replace(/\s{2,}/g, " ").trim(), found };
 }

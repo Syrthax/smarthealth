@@ -1,5 +1,5 @@
 import { redFlag } from "@/lib/chat";
-import { medicationBreach } from "@/lib/voice";
+import { askedForName, medicationBreach, soundsLikeNoise, stripDisclaimer } from "@/lib/voice";
 
 /**
  * One Gemini Live conversation: microphone in, model audio out, tool calls handed to the
@@ -32,6 +32,8 @@ export type VoiceHandlers = {
   modelSpeech(text: string, turn: number): void;
   /** `voided` is the offending term when the medication gate discarded the turn. */
   modelTurnEnd(turn: number, voided: string | null): void;
+  /** The patient "turn" was background noise; the agent's reply to it was discarded unplayed. */
+  noise(userTurn: number, modelTurn: number): void;
   toolCall(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>>;
   emergency(why: string): void;
   failed(code: VoiceFailure, message: string): void;
@@ -42,6 +44,11 @@ const WS_URL =
 
 /** How long model audio waits for the patient's words to be screened before playing anyway. */
 const SCREEN_WAIT_MS = 700;
+/** When a reply looks like it answers noise, how long to let the transcript catch up before deciding. */
+const NOISE_WAIT_MS = 600;
+
+const NOISE_NOTE =
+  "Note from the page, not the patient: what you just heard was background noise, not the patient answering. Do not thank them or move on. Say briefly that you did not quite catch that, and ask your last question again.";
 
 const UNAVAILABLE = "Voice is not available right now. You can keep using the text assistant below.";
 
@@ -129,6 +136,12 @@ export class VoiceSession {
   private held: Float32Array<ArrayBuffer>[] = [];
   private releaseTimer: ReturnType<typeof setTimeout> | null = null;
   private dropping = false;
+
+  // The noise gate. Every patient turn is judged once, before the reply to it plays.
+  private judgedTurn = 0;
+  private noiseTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The agent's last complete utterance — what the patient is supposed to be answering. */
+  private lastAsked = "";
 
   // What the page is showing. Every change goes through setStatus(), which smooths out the
   // flickers a raw event stream produces: a tool result sent back is followed by silence
@@ -312,6 +325,7 @@ export class VoiceSession {
 
   private teardown() {
     if (this.releaseTimer) clearTimeout(this.releaseTimer);
+    if (this.noiseTimer) clearTimeout(this.noiseTimer);
     if (this.settleTimer) clearTimeout(this.settleTimer);
     this.stopAwaiting();
     this.stopPlayback();
@@ -405,6 +419,18 @@ export class VoiceSession {
     this.turnHadOutput = true;
     if (this.dropping) return;
     this.modelText += fragment;
+
+    // A disclaimer tacked on the end: cut it from the transcript and stop the rest of the
+    // turn's audio. Whatever it said before that has already been said.
+    const cleaned = stripDisclaimer(this.modelText);
+    if (cleaned.found) {
+      this.modelText = cleaned.text;
+      this.on.modelSpeech(this.modelText, this.modelTurn);
+      this.stopPlayback();
+      this.dropping = true;
+      this.on.modelTurnEnd(this.modelTurn, null);
+      return;
+    }
     this.on.modelSpeech(this.modelText.trim(), this.modelTurn);
 
     const term = medicationBreach(this.modelText, this.grounded);
@@ -430,6 +456,9 @@ export class VoiceSession {
     // An empty turn (the model handing over to a tool) is not the model finishing.
     if (this.turnHadOutput) this.stopAwaiting();
     this.turnHadOutput = false;
+    if (this.modelText.trim() && !this.dropping) this.lastAsked = this.modelText;
+    if (this.noiseTimer) clearTimeout(this.noiseTimer);
+    this.noiseTimer = null;
     if (this.modelOpen && !this.dropping) this.on.modelTurnEnd(this.modelTurn, voided);
     this.modelOpen = false;
     this.dropping = false;
@@ -461,9 +490,50 @@ export class VoiceSession {
 
   private release(force = false) {
     if (this.released || this.over || (!this.screened && !force) || !this.held.length) return;
+
+    // A patient turn nobody has judged yet: is the reply about to play answering words, or
+    // a TV in the next room? Give a noisy-looking transcript a moment to grow (it can lag
+    // the audio), and let a real answer through the instant one arrives.
+    if (this.userTurn > this.judgedTurn) {
+      if (this.isNoise()) {
+        this.noiseTimer ??= setTimeout(() => {
+          this.noiseTimer = null;
+          if (this.over || this.released) return;
+          if (this.isNoise()) this.rejectNoise();
+          else {
+            this.judgedTurn = this.userTurn;
+            this.release(true);
+          }
+        }, NOISE_WAIT_MS);
+        return;
+      }
+      this.judgedTurn = this.userTurn;
+      if (this.noiseTimer) clearTimeout(this.noiseTimer);
+      this.noiseTimer = null;
+    }
+
     this.released = true;
     for (const pcm of this.held) this.play(pcm);
     this.held = [];
+  }
+
+  private isNoise() {
+    return !askedForName(this.lastAsked) && soundsLikeNoise(this.userText);
+  }
+
+  /**
+   * The reply was to noise. It is dropped unplayed, the transcript marks the "answer" as
+   * background noise, and the agent is told to ask again — so the history it is taking
+   * never fills up with words nobody said.
+   */
+  private rejectNoise() {
+    this.judgedTurn = this.userTurn;
+    this.held = [];
+    this.dropping = true;
+    this.stopPlayback();
+    this.on.noise(this.userTurn, this.modelTurn);
+    this.sendText(NOISE_NOTE);
+    this.setStatus("listening", true);
   }
 
   private play(pcm: Float32Array<ArrayBuffer>) {

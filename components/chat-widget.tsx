@@ -60,6 +60,8 @@ type Msg = {
   voided?: boolean;
   pending?: Pending;
   booking?: BookingConfirmation;
+  /** Heard as speech but judged background noise: kept as a record, never treated as something said. */
+  noise?: boolean;
   /** A divider in the transcript, e.g. where a voice conversation began and ended. */
   marker?: string;
 };
@@ -88,8 +90,8 @@ function forModel({ role, content, urgency, doctors, tests }: Msg) {
   };
 }
 
-/** Proposals and withdrawn turns are page furniture, not conversation. */
-const conversational = (m: Msg) => !m.pending && !m.voided && !!m.content.trim();
+/** Proposals, withdrawn turns and background noise are page furniture, not conversation. */
+const conversational = (m: Msg) => !m.pending && !m.voided && !m.noise && !!m.content.trim();
 
 /**
  * Posts the conversation to /api/chat and reads the NDJSON back. `onReply` gets the prose
@@ -532,6 +534,11 @@ export default function ChatWidget() {
         }
         return {
           ok: true,
+          // Instructions travel with the result, right where the model composes its answer —
+          // a rule only in the system prompt was not enough to stop it adding a disclaimer.
+          howToSayIt: card.question
+            ? "Ask exactly this question, then wait for the answer. Do not recommend anything yet."
+            : "Say what it could be, who to see and how soon, and what to prepare for. Then offer to book, and stop. Add no disclaimer: do not say this is not medical advice or to see a healthcare professional — naming the doctor already is that.",
           reply: card.content,
           urgency: card.urgency,
           assessment: card.assessment,
@@ -642,6 +649,15 @@ export default function ChatWidget() {
         upsert(`vm-${sid}-${turn}`, { content: text, streaming: true }, { role: "assistant", content: "", via: "voice" }),
       modelTurnEnd: (turn, voided) =>
         upsert(`vm-${sid}-${turn}`, voided ? { content: VOIDED, voided: true, streaming: false } : { streaming: false }),
+      noise: (userTurn, modelTurn) => {
+        // Not something the patient said: it must not count as consent, nor reach triage.
+        heard.current.delete(`${sid}:${userTurn}`);
+        setMessages((m) =>
+          m
+            .filter((x) => x.id !== `vm-${sid}-${modelTurn}`)
+            .map((x) => (x.id === `vu-${sid}-${userTurn}` ? { ...x, noise: true } : x)),
+        );
+      },
       toolCall: runTool,
       emergency: emergencyFromVoice,
       failed: (_code, message) => {
@@ -754,8 +770,20 @@ export default function ChatWidget() {
                   </p>
                 ) : m.role === "user" ? (
                   <div key={m.id ?? i} className="rise-in ml-auto w-fit max-w-[85%]">
-                    <p className="rounded-card bg-accent-wash px-3 py-2 text-[14px]">{m.content}</p>
-                    {m.via === "voice" && <SpokenTag />}
+                    <p
+                      className={`rounded-card px-3 py-2 text-[14px] ${
+                        m.noise ? "border border-dashed border-rule text-muted line-through" : "bg-accent-wash"
+                      }`}
+                    >
+                      {m.content}
+                    </p>
+                    {m.noise ? (
+                      <p className="mt-0.5 text-right font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
+                        Background noise · ignored
+                      </p>
+                    ) : (
+                      m.via === "voice" && <SpokenTag />
+                    )}
                   </div>
                 ) : (
                   <AssistantMessage
@@ -842,7 +870,7 @@ function VoiceBar({ status, note, onStart }: { status: VoiceStatus; note: string
  * assistant made of them — clearly labelled as neither a diagnosis nor a medical record.
  */
 function TranscriptSheet({ messages }: { messages: Msg[] }) {
-  const said = messages.filter((m) => m.role === "user" && m.content.trim());
+  const said = messages.filter((m) => m.role === "user" && !m.noise && m.content.trim());
   const booked = messages.flatMap((m) => (m.booking ? [m.booking] : []));
   if (!said.length) return null;
 

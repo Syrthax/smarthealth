@@ -43,6 +43,7 @@ test("extractJson survives fences and model preamble", () => {
     doctorIds: [3],
     testCodes: ["CBC", "LFT"],
     outOfScope: false,
+    offTopic: false,
   });
 });
 
@@ -61,6 +62,7 @@ test("extractJson rejects junk and coerces bad id lists", () => {
       doctorIds: [],
       testCodes: ["CBC", "MRI-BR"],
       outOfScope: false,
+      offTopic: false,
     },
   );
 });

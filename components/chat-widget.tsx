@@ -13,6 +13,7 @@ import {
 } from "@/lib/chat";
 import type { BookingConfirmation } from "@/lib/booking";
 import { patientAgreed } from "@/lib/voice";
+import { FRONT_DESK, OFF_TOPIC_LIMIT, OFF_TOPIC_REPLIES } from "@/lib/guard";
 
 type Urgency = "routine" | "soon" | "urgent" | "emergency";
 
@@ -62,6 +63,12 @@ type Msg = {
   booking?: BookingConfirmation;
   /** Heard as speech but judged background noise: kept as a record, never treated as something said. */
   noise?: boolean;
+  /** Words that tried to change how the assistant works. Shown struck out; never sent to a model. */
+  blocked?: boolean;
+  /** Which off-topic strike this reply was, if it was one. */
+  offTopic?: number;
+  /** The desk closed the conversation here; nothing more can be sent until it is cleared. */
+  ended?: boolean;
   /** A divider in the transcript, e.g. where a voice conversation began and ended. */
   marker?: string;
 };
@@ -91,7 +98,7 @@ function forModel({ role, content, urgency, doctors, tests }: Msg) {
 }
 
 /** Proposals, withdrawn turns and background noise are page furniture, not conversation. */
-const conversational = (m: Msg) => !m.pending && !m.voided && !m.noise && !!m.content.trim();
+const conversational = (m: Msg) => !m.pending && !m.voided && !m.noise && !m.blocked && !!m.content.trim();
 
 /**
  * Posts the conversation to /api/chat and reads the NDJSON back. `onReply` gets the prose
@@ -146,6 +153,8 @@ function finished(e: Record<string, unknown>): Msg {
     doctors: e.doctors as Doctor[] | undefined,
     tests: e.tests as Test[] | undefined,
     emergency: e.emergency as Msg["emergency"],
+    offTopic: typeof e.offTopic === "number" ? e.offTopic : undefined,
+    ended: e.ended === true,
     streaming: false,
   };
 }
@@ -231,8 +240,14 @@ const URGENCY: Record<Urgency, { label: string; note: string; cls: string }> = {
 const OPENER: Msg = {
   role: "assistant",
   content:
-    "Tell me what has been going on and roughly how long for. I will tell you what it is usually looked at for, how soon you ought to be seen, and which doctor is the right person to get it properly checked.",
+    `Hello, you've reached ${FRONT_DESK}. Tell me what has been going on with your health and roughly how long for — I'll tell you what it could be, how soon you ought to be seen, and which doctor is the right person to check it.`,
 };
+
+/** What the agent does once a booking is made — and then voice closes itself. */
+const BOOKED_NEXT =
+  "Tell them it is booked, read the reference slowly, letter by letter, and say it is on their screen. Then say a short, warm goodbye. Ask nothing else — the call ends after this.";
+/** Reading a reference out takes a while; this is only a floor under a goodbye that never comes. */
+const BOOKED_GOODBYE_FLOOR_MS = 60_000;
 
 const VOIDED =
   "Let me stop there — what to take is a question for the doctor, who can look at the whole picture. I can help you book them.";
@@ -282,6 +297,9 @@ export default function ChatWidget() {
   const heard = useRef(new Map<string, { seq: number; text: string }>());
   const heardSeq = useRef(0);
   const confirming = useRef(new Map<string, Promise<Record<string, unknown>>>());
+  /** Off-topic replies in a row during voice. Any health-related tool call resets it. */
+  const offTopicRun = useRef(0);
+  const ended = messages.some((m) => m.ended);
   const live = voice === "connecting" || voice === "listening" || voice === "thinking" || voice === "speaking";
 
   // Called on every typed chunk as well as on every new message, so the panel keeps
@@ -378,7 +396,12 @@ export default function ChatWidget() {
   function clearChat() {
     if (!armed) return setArmed(true);
     setArmed(false);
+    resetChat();
+  }
+
+  function resetChat() {
     endVoice();
+    offTopicRun.current = 0;
     try {
       speechSynthesis.cancel();
     } catch {
@@ -400,7 +423,7 @@ export default function ChatWidget() {
   // Called with no argument from the composer, or with the text of a chosen option.
   async function send(answer?: string) {
     const text = (answer ?? input).trim();
-    if (!text || busy) return;
+    if (!text || busy || ended) return;
 
     const next: Msg[] = [...messages, { role: "user", content: text }];
     setMessages(next);
@@ -487,9 +510,10 @@ export default function ChatWidget() {
     const r = await confirmPending(pid, true);
     session.current?.sendText(
       r.ok
-        ? `Note from the page, not the patient: they pressed Confirm on screen and it is booked: ${JSON.stringify(r.booking)}. Tell them it is booked and read the reference slowly.`
+        ? `Note from the page, not the patient: they pressed Confirm on screen and it is booked: ${JSON.stringify(r.booking)}. ${BOOKED_NEXT}`
         : `Note from the page, not the patient: they pressed Confirm on screen but it did not go through: ${String(r.message)} Tell them plainly.`,
     );
+    if (r.ok) session.current?.endAfterReply(BOOKED_GOODBYE_FLOOR_MS);
   }
 
   function pressCancel(pid: string) {
@@ -506,9 +530,27 @@ export default function ChatWidget() {
     setVoiceNote(null);
   }
 
+  /**
+   * One more off-topic turn in voice. The line to say and whether it ends the conversation
+   * are decided here, in code — the agent only reads the line out.
+   */
+  function strike(): { say: string; end: boolean } {
+    const n = Math.min(++offTopicRun.current, OFF_TOPIC_LIMIT);
+    const end = n >= OFF_TOPIC_LIMIT;
+    if (end) append({ role: "assistant", content: "", marker: "Conversation ended", ended: true });
+    return { say: OFF_TOPIC_REPLIES[n - 1], end };
+  }
+
   /** Every tool the voice agent can call. Server tools pass straight through; the rest are here. */
   async function runTool(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (name !== "off_topic") offTopicRun.current = 0; // back on topic: the count starts again
     switch (name) {
+      case "off_topic": {
+        const { say, end } = strike();
+        if (end) session.current?.endAfterReply();
+        return { ok: true, sayExactly: say, conversationEnds: end };
+      }
+
       case "assess_symptoms": {
         // The patient's own transcribed words are the input, so redFlag() on the server
         // reads what they said rather than the model's paraphrase of it.
@@ -600,7 +642,12 @@ export default function ChatWidget() {
         const open = messagesRef.current.filter((m) => m.pending?.state === "open");
         // A garbled id with exactly one open proposal still means that proposal. Consent is checked either way.
         if (!messagesRef.current.some((m) => m.pending?.pid === pid) && open.length === 1) pid = open[0].pending!.pid;
-        return confirmPending(pid, false);
+        const r = await confirmPending(pid, false);
+        if (!r.ok) return r;
+        // Booked: the call has done its job. The agent reads the reference and says goodbye,
+        // then voice closes itself and the page shows the transcript with the booking card.
+        session.current?.endAfterReply(BOOKED_GOODBYE_FLOOR_MS);
+        return { ...r, next: BOOKED_NEXT };
       }
 
       default:
@@ -609,7 +656,7 @@ export default function ChatWidget() {
   }
 
   function startVoice() {
-    if (session.current && live) return;
+    if ((session.current && live) || ended) return;
     const sid = ++sessionNo.current;
     setVoiceNote(null);
 
@@ -619,7 +666,7 @@ export default function ChatWidget() {
     const note = prior.length
       ? `Note from the page, not the patient: voice is reconnecting mid-conversation. So far: ${prior
           .map((m) => `${m.role === "user" ? "Patient" : "Assistant"}: ${m.content.slice(0, 300)}`)
-          .join(" | ")}. Do not repeat any of it. Say only that you are back and listening.`
+          .join(" | ")}. Do not repeat any of it. Say only: "Hello again, you're back with ${FRONT_DESK}. I'm listening."`
       : undefined;
 
     // Markers bracket the conversation in the transcript — but only once it actually
@@ -657,6 +704,15 @@ export default function ChatWidget() {
             .filter((x) => x.id !== `vm-${sid}-${modelTurn}`)
             .map((x) => (x.id === `vu-${sid}-${userTurn}` ? { ...x, noise: true } : x)),
         );
+      },
+      injection: (userTurn, modelTurn) => {
+        heard.current.delete(`${sid}:${userTurn}`);
+        setMessages((m) =>
+          m
+            .filter((x) => x.id !== `vm-${sid}-${modelTurn}`)
+            .map((x) => (x.id === `vu-${sid}-${userTurn}` ? { ...x, blocked: true } : x)),
+        );
+        return strike();
       },
       toolCall: runTool,
       emergency: emergencyFromVoice,
@@ -772,14 +828,14 @@ export default function ChatWidget() {
                   <div key={m.id ?? i} className="rise-in ml-auto w-fit max-w-[85%]">
                     <p
                       className={`rounded-card px-3 py-2 text-[14px] ${
-                        m.noise ? "border border-dashed border-rule text-muted line-through" : "bg-accent-wash"
+                        m.noise || m.blocked ? "border border-dashed border-rule text-muted line-through" : "bg-accent-wash"
                       }`}
                     >
                       {m.content}
                     </p>
-                    {m.noise ? (
+                    {m.noise || m.blocked ? (
                       <p className="mt-0.5 text-right font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
-                        Background noise · ignored
+                        {m.blocked ? "Not a health question · ignored" : "Background noise · ignored"}
                       </p>
                     ) : (
                       m.via === "voice" && <SpokenTag />
@@ -801,6 +857,18 @@ export default function ChatWidget() {
               <div ref={endRef} />
             </div>
 
+            {ended ? (
+              <div className="shrink-0 border-t border-rule p-3 text-center">
+                <p className="text-[13px] text-muted">This conversation has ended.</p>
+                <button
+                  onClick={resetChat}
+                  className="mt-2 w-full rounded-ctl bg-accent px-3 py-2 text-[14px] font-medium text-paper transition-colors hover:bg-accent-hover active:translate-y-px"
+                >
+                  Start a new conversation
+                </button>
+              </div>
+            ) : (
+              <>
             <VoiceBar status={voice} note={voiceNote} onStart={startVoice} />
 
             <form
@@ -833,6 +901,8 @@ export default function ChatWidget() {
                 Send
               </button>
             </form>
+              </>
+            )}
             </>
           )}
         </section>
@@ -870,7 +940,7 @@ function VoiceBar({ status, note, onStart }: { status: VoiceStatus; note: string
  * assistant made of them — clearly labelled as neither a diagnosis nor a medical record.
  */
 function TranscriptSheet({ messages }: { messages: Msg[] }) {
-  const said = messages.filter((m) => m.role === "user" && !m.noise && m.content.trim());
+  const said = messages.filter((m) => m.role === "user" && !m.noise && !m.blocked && m.content.trim());
   const booked = messages.flatMap((m) => (m.booking ? [m.booking] : []));
   if (!said.length) return null;
 

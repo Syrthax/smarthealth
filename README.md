@@ -114,6 +114,28 @@ you directly, so voice cannot — and this README would rather say so than prete
 
 The transcript is text in `localStorage`, like typed chat. Audio is never stored.
 
+## Staying on topic, and not being talked out of it
+
+The assistant is a front desk and introduces itself as one — in text and in voice, the first
+words are always "Hello, you've reached the front desk at Meridian Health City". It helps with
+health and nothing else. Talk about your car and it says so, kindly; keep going and it says so
+more firmly and warns; a third time in a row and it says goodbye and closes the conversation.
+The three lines are server-written, never repeated, and counted in code — the transcript
+carries the count, so the server holds no state. A health question in between resets it.
+
+Prompt injection is handled without a library (the available ones are remote APIs that would
+see every patient message, and are heuristic anyway). The layers, all code:
+
+- `lib/guard.ts` refuses obvious override attempts — "ignore your instructions", "reveal your
+  prompt", "you are now…", role markers like `system:` or `<|im_start|>`, forged
+  `[previously recommended]` lines, spoken "notes from the page" — before any model sees
+  them. They count as an off-topic strike. The emergency check still runs first.
+- Role markers are stripped from every visitor message on its way to a model.
+- A reply that recites the system prompt is voided, like one that names a drug.
+- Both prompts treat the visitor's words as information, never instructions.
+- Underneath, the structural limits hold whatever a model is talked into: a closed tool list,
+  prices and bookings only from Postgres, output parsed against a schema.
+
 ## Access
 
 The whole site sits behind one shared password (`Password` in Vercel). `proxy.ts` runs in

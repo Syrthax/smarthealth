@@ -12,6 +12,26 @@ import {
   type Specialty,
 } from "@/lib/chat";
 import { callFeatherless } from "@/lib/featherless";
+import { injectionAttempt, neutralise, nextStrike, OFF_TOPIC_LIMIT, OFF_TOPIC_REPLIES } from "@/lib/guard";
+
+/**
+ * The desk's answer to anything that is not about health — or that tries to change how the
+ * assistant works. Server-written, firmer each time, and the last one ends the
+ * conversation (`ended`). The count comes from the transcript, so the server holds no state.
+ */
+function offTopic(history: { role: string; content: string }[]) {
+  const strike = nextStrike(history);
+  return {
+    t: "done",
+    reply: OFF_TOPIC_REPLIES[strike - 1],
+    urgency: "routine",
+    nextSteps: [],
+    doctors: [],
+    tests: [],
+    offTopic: strike,
+    ended: strike >= OFF_TOPIC_LIMIT,
+  };
+}
 
 /**
  * Newline-delimited JSON. `reply` events carry the prose as it generates; exactly one
@@ -58,7 +78,12 @@ export async function POST(req: Request) {
 
   const messages = (body.messages ?? [])
     .filter((m) => (m?.role === "user" || m?.role === "assistant") && typeof m.content === "string")
-    .map((m) => ({ role: m.role, content: m.content.slice(0, 1500) }))
+    // Role markers and forged "[previously recommended]" lines are stripped from what the
+    // visitor wrote before any model sees it. The desk's own turns keep their markers.
+    .map((m) => ({
+      role: m.role,
+      content: (m.role === "user" ? neutralise(m.content) : m.content).slice(0, 1500),
+    }))
     // Six exchanges. Long enough that someone can add "I forgot to mention…" three
     // times and still be understood; short enough to stay well inside the context window.
     .slice(-12);
@@ -85,6 +110,12 @@ export async function POST(req: Request) {
   // Red flags short-circuit. The model is never consulted on an emergency.
   const flag = redFlag(latest);
   if (flag) return ndjson(async (emit) => emit({ t: "done", ...emergencyAnswer(flag) }));
+
+  // An attempt to rewrite the assistant never reaches it. After the emergency check, so
+  // "ignore your rules, I have crushing chest pain" still gets the ambulance.
+  // Checked on the raw text: neutralise() has already stripped markers from `latest`.
+  const raw = [...(body.messages ?? [])].reverse().find((m) => m?.role === "user")?.content;
+  if (injectionAttempt(String(raw ?? ""))) return ndjson(async (emit) => emit(offTopic(messages)));
 
   const [doctors, tests, specialties] = await Promise.all([
     rows<Doctor>(sql`SELECT * FROM doctors ORDER BY id`),
@@ -123,6 +154,11 @@ export async function POST(req: Request) {
         tests: [],
         degraded: true,
       });
+      return;
+    }
+
+    if (parsed.offTopic) {
+      emit(offTopic(messages));
       return;
     }
 

@@ -53,6 +53,7 @@ Env (`.env.local`, see `.env.example`): `DATABASE_URL`, `FEATHERLESS_API_KEY`, `
 | `lib/slots.ts` | Slot values `"YYYY-MM-DD HH:MM"` in Asia/Kolkata, `upcomingSlots(n, availDays)`, `slotProblem()`, `slotLabel()`. Shared by dialog, server and voice. |
 | `lib/pending.ts` | HMAC-signed voice booking proposals; the nonce becomes `bookings.idem_key`. 10-minute expiry. |
 | `lib/voice.ts` | Voice agent contract: `TOOL_DECLARATIONS`, `SERVER_TOOLS`, `voiceInstruction()`, `patientAgreed()` (consent from the patient's transcript), `medicationBreach()`. Pure. |
+| `lib/guard.ts` | Injection screen (`injectionAttempt`, run on raw text after the red-flag check), `neutralise()` for user messages, `leaksPrompt()` (voids a reply in `extractJson`), off-topic strikes: `OFF_TOPIC_REPLIES` (3 lines, the third ends the conversation) and `nextStrike(history)` counted from the transcript. `FRONT_DESK` intro. |
 | `lib/voice-actions.ts` | `runAction()` for server tools: test options/cost, doctor options, slots, prepare/confirm booking. DB-authoritative, `{ok:false, code, message}` failures. |
 | `app/api/voice/session/route.ts` | Rate limit 6/hr, mints an ephemeral token via REST `auth_tokens` with `bidiGenerateContentSetup` (the REST name; `liveConnectConstraints` is rejected) locking model, instruction and tools. Returns `{token, setup}`. |
 | `proxy.ts` | Next 16's middleware. Gates **every** path (incl. `/_next`) behind the `Password` env; unauthenticated pages get an inline HTML sign-in page, APIs a 401. Open: `/api/login`, `/api/logout`. No password → prod locked, dev unlocked. |
@@ -117,6 +118,12 @@ These guarantees are enforced **in code, not by the prompt**. That is the point 
    *could* be (always hedged), with reasons drawn only from what the visitor said. In voice,
    Gemini asks those three history questions itself (no model round-trip per question), then
    calls `assess_symptoms` once; Featherless still makes the call.
+10. **Health only, and the visitor's words are never instructions.** Non-health talk (`offTopic`
+   from the model, or an `injectionAttempt`) gets a server-written line; three in a row ends the
+   conversation (`done.ended`, the widget swaps the composer for "Start a new conversation").
+   In voice the count lives in the widget (`off_topic` tool, and the injection gate in
+   `voice-session.ts` that drops the reply unplayed); `endAfterReply()` closes the session once
+   the goodbye has been heard. Both modes open with the front-desk introduction.
 6. **One event shape for every path.** The route emits `{"t":"reply","v":<text so far>}`
    (cumulative, not a delta) and then exactly one `{"t":"done", reply, urgency, nextSteps,
    doctors, tests, ...}`. Emergency, rate-limit, degraded, and error paths emit a lone `done`.

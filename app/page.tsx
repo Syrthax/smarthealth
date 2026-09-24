@@ -33,8 +33,8 @@ export default async function Home() {
           </h1>
           <p className="mt-4 max-w-xl text-[15px] text-muted">
             Describe what you are feeling in the intake window at the bottom of this page. It
-            suggests which specialist to see and which tests to have ready — then books both. It
-            does not diagnose and it does not prescribe.
+            suggests which specialist to see, how soon, and which tests to have ready — then books
+            both, so your consultation starts with the right doctor.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
             <a

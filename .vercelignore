@@ -1,0 +1,8 @@
+# The CLI uploads the working directory. Secrets and local tooling stay here.
+.env*
+!.env.example
+.agents
+.claude
+node_modules
+.next
+*.tsbuildinfo

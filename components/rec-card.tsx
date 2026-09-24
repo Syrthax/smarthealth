@@ -2,35 +2,35 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Doctor, Test } from "@/lib/chat";
+import type { BookingConfirmation } from "@/lib/booking";
+import { upcomingSlots } from "@/lib/slots";
 
-type Target = { kind: "doctor" | "test" | "referral"; refId: number; title: string; context: string };
+type Target = {
+  kind: "doctor" | "test" | "referral";
+  refId: number;
+  title: string;
+  context: string;
+  availDays?: string;
+};
+
+/**
+ * Fired on window after any booking succeeds, from wherever it was made. The chat widget
+ * listens so a booking made from a card shows up in the conversation — and, if a voice
+ * session is open, so the agent knows about it too. The detail is the canonical
+ * BookingConfirmation the server returned, never something assembled here.
+ */
+export const BOOKED_EVENT = "mhc:booked";
 
 const STORE_KEY = "mhc.patient";
 
 /** Whatever we saved last time. Storage can be blocked or empty; both mean "start fresh". */
-function remembered(): { name: string; phone: string } {
+export function remembered(): { name: string; phone: string } {
   try {
     const saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}");
     return { name: saved.name ?? "", phone: saved.phone ?? "" };
   } catch {
     return { name: "", phone: "" };
   }
-}
-
-/** Next six outpatient slots, Sunday excluded. ponytail: no real availability table in the demo. */
-function nextSlots(): string[] {
-  const times = ["09:30", "11:00", "15:30", "17:00"];
-  const out: string[] = [];
-  const d = new Date();
-  for (let i = 1; out.length < 6; i++) {
-    const day = new Date(d.getTime() + i * 864e5);
-    if (day.getDay() === 0) continue;
-    const label = day.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
-    for (const t of times) {
-      if (out.length < 6) out.push(`${label}, ${t}`);
-    }
-  }
-  return out;
 }
 
 const Label = ({ children }: { children: React.ReactNode }) => (
@@ -67,6 +67,7 @@ export function DoctorCard({ doctor }: { doctor: Doctor }) {
             refId: doctor.id,
             title: doctor.name,
             context: `${doctor.specialty} · ₹${doctor.consult_fee}`,
+            availDays: doctor.avail_days,
           }}
           onClose={() => setOpen(false)}
         />
@@ -132,15 +133,17 @@ export function TestCard({ test }: { test: Test }) {
 
 function BookingDialog({ target, onClose }: { target: Target; onClose: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
-  const [slots] = useState(nextSlots);
+  // Shared with the server's validator and the voice agent (lib/slots.ts), so all three
+  // agree on what a slot is. A doctor is only offered on the days they sit.
+  const [slots] = useState(() => upcomingSlots(6, target.availDays));
   // Read once during the first render. The dialog only ever mounts on the client
   // (it is behind an open flag), so there is no server/client mismatch to worry about.
   const [name, setName] = useState(() => remembered().name);
   const [phone, setPhone] = useState(() => remembered().phone);
-  const [slot, setSlot] = useState(slots[0]);
+  const [slot, setSlot] = useState(slots[0]?.value ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState<string | null>(null);
+  const [booking, setBooking] = useState<BookingConfirmation | null>(null);
 
   useEffect(() => {
     ref.current?.showModal();
@@ -166,7 +169,8 @@ function BookingDialog({ target, onClose }: { target: Target; onClose: () => voi
       } catch {
         /* storage blocked — the booking still went through */
       }
-      setCode(data.refCode);
+      setBooking(data.booking);
+      window.dispatchEvent(new CustomEvent(BOOKED_EVENT, { detail: data.booking }));
     } catch {
       setError("Network problem. Please try again.");
     } finally {
@@ -186,21 +190,21 @@ function BookingDialog({ target, onClose }: { target: Target; onClose: () => voi
     >
       <div className="border-b border-rule px-5 py-4">
         <h2 className="text-[15px] font-semibold">
-          {code ? "Booking confirmed" : target.kind === "referral" ? "Request referral" : "Confirm booking"}
+          {booking ? "Booking confirmed" : target.kind === "referral" ? "Request referral" : "Confirm booking"}
         </h2>
         <p className="mt-0.5 text-[13px] text-muted">
           {target.title} · {target.context}
         </p>
       </div>
 
-      {code ? (
+      {booking ? (
         <div className="px-5 py-5">
           <p className="text-[14px]">
             Your reference number is{" "}
-            <span className="font-mono font-medium text-success">{code}</span>. Keep it for the
-            front desk.
+            <span className="font-mono font-medium text-success">{booking.reference}</span>. Keep
+            it for the front desk.
           </p>
-          <p className="mt-2 text-[13px] text-muted">{slot}</p>
+          <p className="mt-2 text-[13px] text-muted">{booking.slotLabel}</p>
           <button
             onClick={() => ref.current?.close()}
             className={`${btn} mt-4 w-full bg-accent text-paper hover:bg-accent-hover`}
@@ -240,7 +244,9 @@ function BookingDialog({ target, onClose }: { target: Target; onClose: () => voi
               className={`${field} text-ink`}
             >
               {slots.map((s) => (
-                <option key={s}>{s}</option>
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
               ))}
             </select>
           </label>

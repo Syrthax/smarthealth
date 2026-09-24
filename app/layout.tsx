@@ -3,6 +3,7 @@ import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import Link from "next/link";
 import ChatWidget from "@/components/chat-widget";
+import SessionLock from "@/components/session-lock";
 
 const plexSans = IBM_Plex_Sans({
   variable: "--font-plex-sans",
@@ -72,6 +73,7 @@ function SiteNav() {
           >
             Book a consultation
           </Link>
+          <SessionLock />
         </div>
         {/* Same destinations on small screens — scrolls inside itself, never the page. */}
         <ul className="-mx-4 flex gap-5 overflow-x-auto px-4 pb-2.5 text-[14px] text-muted md:hidden">
@@ -108,8 +110,8 @@ function SiteFooter() {
       </div>
       <div className="border-t border-rule">
         <p className="mx-auto max-w-6xl px-4 py-4 text-[13px] text-muted sm:px-6">
-          Demonstration site. The intake assistant does not diagnose, prescribe or give medical
-          advice — it only suggests which department and which tests to start with. In an emergency,
+          The health assistant helps you work out where to start — which department, how soon,
+          and which tests to have ready — so the right doctor sees you sooner. In an emergency,
           call the number above.
         </p>
       </div>

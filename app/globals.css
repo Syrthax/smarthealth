@@ -83,10 +83,18 @@
     background: var(--color-accent);
     animation: blink 1s steps(2, start) infinite;
   }
+  /* Voice is listening: a ring that breathes. Always paired with a written state label. */
+  .breathe {
+    animation: breathe 1.6s var(--ease-in-out) infinite;
+  }
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+@keyframes breathe {
+  50% { transform: scale(1.35); opacity: 0.55; }
 }
 
 @keyframes blink {
@@ -109,7 +117,7 @@
   }
   /* The spinner stops turning and the caret stops blinking; the words carry the state.
      The typewriter itself is disabled in JS, so no caret is rendered at all. */
-  .spin, .caret {
+  .spin, .caret, .breathe {
     animation: none;
   }
   @keyframes fade-only {

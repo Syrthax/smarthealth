@@ -46,30 +46,106 @@ for. Without them a small model picks by vibe — an early version suggested Gyn
 headache. Tests are chosen by code (`MRI-BR`, `CBC`) rather than row number, because small
 models ground poorly on bare integers.
 
-**Both API routes are rate limited** — 20 chat messages and 5 bookings per hour per IP,
-counted in Postgres rather than Redis so there is no second service to run.
+**Every costly or mutating route is rate limited** — per IP, counted in Postgres rather than
+Redis so there is no second service to run: 20 chat messages, 5 bookings (dialog and voice
+share the one budget), 6 voice sessions and 60 voice lookups an hour. Audio frames are never
+counted; sessions and actions are. Refusals are a 429 with `Retry-After` and
+`rateLimited: true` everywhere except the chat stream, which keeps its one `done` event.
 
 **A consultation slot belongs to one patient.** A partial unique index on `(ref_id, slot)
 WHERE kind = 'doctor'` lets the database arbitrate, rather than a check-then-insert that
 would still let two simultaneous requests through. Labs run tests in parallel, so the
 constraint is deliberately scoped to consultations and not to every booking.
 
+## Voice mode
+
+**Talk instead** in the widget starts a Gemini Live session: you speak, it answers aloud,
+looks up tests and prices, and books — with the same card appearing on screen as it reads
+the reference out. It is not speech-to-text glued to the chat. The model is an agent with
+nine explicit tools, and none of them is "run a query".
+
+**Gemini is the conversational interface. The server is the authority.** The model may ask
+for an action; `/api/voice/action` decides whether it is valid; the database decides whether a
+booking happened; the page and the voice both report that one result.
+
+- **The key never reaches the browser.** `/api/voice/session` mints a single-use token with
+  the model, the system instruction and the tool list *locked into it*. The browser then
+  talks to Gemini directly (Next route handlers cannot hold a WebSocket, and proxying audio
+  would add a hop to every word). A page edited in devtools can send a different system
+  prompt; it is ignored — verified against the live API.
+- **The voice model takes the history; it does not draw the conclusion.** It asks how long,
+  when, and what else — conversationally, with no model round-trip per question — then calls
+  `assess_symptoms`, which is `/api/chat` unchanged: red flags, medication voiding,
+  ask-before-answer, DB-hydrated cards. It relays that answer; it does not form its own.
+- **Facts come from rows.** Prices, fees, doctors, labs, prep notes and slots are only ever
+  tool results. Unknown codes and ids are refused, never approximated. Hospital facts
+  (hours, parking) get the same fixed reply as text chat.
+- **One booking implementation.** `lib/booking.ts` is the only place a booking is validated
+  and written; the dialog and the agent both call it, and both get back the same
+  `BookingConfirmation`. Whether a test is a referral is decided by its lab, not by the caller.
+- **Nothing is booked without a yes.** `prepare_booking` validates and returns a signed
+  proposal but writes nothing; the card appears on screen. `confirm_booking` runs only if you
+  press Confirm or say yes *in your own transcribed words, after the proposal was made* — the
+  model reporting that you agreed is not agreement. The server re-checks everything at write
+  time. The model never sees the signed token, only a short id, so it cannot swap the slot or
+  phone number between the read-back and the booking.
+- **Retries cannot double-book.** The proposal's nonce is stored as `bookings.idem_key`. A
+  reconnect, a duplicated tool call or a second "yes" returns the booking already made, and
+  does not spend another of the five an hour.
+- **It never says "booked" unless the insert succeeded.** A taken slot, a rate limit or an
+  error comes back as `ok: false` with a sentence to say aloud, and the card shows it too.
+
+### What voice guarantees, and what it cannot
+
+Text chat can promise that an emergency never reaches the model. A native-audio model hears
+you directly, so voice cannot — and this README would rather say so than pretend. What holds:
+
+- Every fragment of your transcribed speech runs through the same `redFlag()` as text. A hit
+  ends the session on the spot and shows the fixed emergency answer, read aloud by the
+  browser's own speech synthesis — never by the model.
+- The model's reply to each turn is held back until your words have been screened (or 700 ms
+  pass, since transcription can lag). So what it would have said to an emergency is normally
+  never played.
+- Its own transcript is checked as it speaks. A medicine or dose the server did not say first
+  stops playback, drops the rest of the turn and replaces it with a withdrawal note. A drug
+  word the server *did* say — "stop antihistamines 72 hours before" is a real prep note —
+  may be relayed. Audio that has already played cannot be unsaid; the gate bounds it to a
+  fragment, not to zero.
+
+The transcript is text in `localStorage`, like typed chat. Audio is never stored.
+
+## Access
+
+The whole site sits behind one shared password (`Password` in Vercel). `proxy.ts` runs in
+front of every request — pages, JavaScript bundles and APIs — and without a valid session it
+serves a self-contained sign-in page instead, so none of the app is handed out beforehand.
+A session lasts exactly 7 minutes from sign-in, enforced by a signed HttpOnly cookie on the
+server; the page counts down in the nav and locks itself when time is up. Sign-in attempts
+are rate limited, and changing the password signs everyone out.
+
 ## Stack
 
-Next.js 16 (App Router) · Neon Postgres · Featherless AI · Tailwind v4.
+Next.js 16 (App Router) · Neon Postgres · Featherless AI · Gemini Live · Tailwind v4.
 Three runtime dependencies: `next`, `react`, `@neondatabase/serverless`.
 
-No AI SDK — Featherless is OpenAI-compatible and the client is 50 lines. No ORM, no
-component library, no state manager.
+No AI SDK — Featherless is OpenAI-compatible and the client is 50 lines. Gemini Live is spoken
+to over the browser's own WebSocket with an AudioWorklet for the microphone; the protocol is
+JSON frames and did not justify a package. No ORM, no component library, no state manager.
 
 ## Running it
 
 ```bash
 npm install
-cp .env.example .env.local     # fill in DATABASE_URL and FEATHERLESS_API_KEY
+cp .env.example .env.local     # fill in DATABASE_URL, FEATHERLESS_API_KEY, GEMINI_API_KEY
 npm run db:reset               # applies db/schema.sql then db/seed.sql
 npm run dev
 ```
+
+Upgrading a database that already holds bookings? `npm run db:migrate` applies the additive,
+repeatable changes in `db/migrate.sql` (currently the `idem_key` column) without dropping anything.
+
+`GEMINI_API_KEY` comes from [Google AI Studio](https://aistudio.google.com). Voice is optional:
+without the key the widget says voice is unavailable and text chat works as before.
 
 `DATABASE_URL` comes from any Postgres; on Vercel, `vercel integration add neon` provisions
 one and writes it for you. `FEATHERLESS_API_KEY` comes from
@@ -86,7 +162,8 @@ HuggingFace-gated and return 403 unless your Featherless organisation is linked.
 | `npm run dev` | Dev server on :3000 |
 | `npm run build` | Production build |
 | `npm run db:reset` | Drop, recreate and reseed every table |
-| `npm test` | Red-flag matching and model-output parsing |
+| `npm run db:migrate` | Apply `db/migrate.sql` to an existing database, dropping nothing |
+| `npm test` | Red flags, model-output parsing, the booking service, voice tools and consent |
 
 ## Schema
 
@@ -95,7 +172,7 @@ specialties(name, department, sees)          -- what each desk actually handles
 doctors(id, name, specialty → specialties, qualification, consult_fee, avail_days, bio)
 labs(id, name, kind 'in_house'|'partner', address, phone)
 tests(id, name, code, lab_id → labs, price, prep_notes, turnaround_hours, ordered_for)
-bookings(id, kind 'doctor'|'test'|'referral', ref_id, patient_name, phone, slot, ref_code)
+bookings(id, kind 'doctor'|'test'|'referral', ref_id, patient_name, phone, slot, ref_code, idem_key)
 api_hits(ip, route, at)                      -- rate-limit window
 ```
 
@@ -108,7 +185,13 @@ visible rather than a dead end.
 `npm test` covers the parts that must not break: that red flags fire on real emergencies, that
 they stay quiet on ordinary complaints, that medication advice is caught wherever it hides in
 the response, and that model output survives markdown fences, prose padding and malformed id
-lists.
+lists. The booking service and the voice tools run against a fake `sql` tag: prices and fees
+equal the row, unknown items are refused, partner labs become referrals, a taken slot or a
+rate limit never yields a confirmation, and one idempotency key makes exactly one booking.
+
+Voice itself is tested by hand in a real session (realtime model behaviour is not a unit
+test): ask a price, book, confirm, check the row, the card and the spoken reference agree;
+deny the microphone; drop the network; try a taken slot; say a red-flag phrase.
 
 The rate-limit boundary is verified by hand against a live database rather than in `npm test`
 — it needs real Postgres, and the off-by-one it once had is now documented at the query
@@ -125,7 +208,10 @@ The options are where it shows it knows how symptoms travel: a bowel complaint g
 about blood, vomiting and fever; a headache gets asked about vision changes and duration.
 `extractJson` enforces that asking and answering are mutually exclusive — a response that
 tries to do both has its recommendation stripped, because recommending while still asking is
-a contradiction. It commits after two rounds. Answered questions stay on screen as a record
+a contradiction. It takes a short history first — how long, when it happens or what sets it
+off, and the companion symptoms that travel with the complaint — skips anything already said,
+and commits after three rounds. The answer then names what it *could* be, why (in the
+visitor's own details, never invented ones), who to see, how soon, and what to prepare. Answered questions stay on screen as a record
 but stop being clickable.
 
 ## The reply streams
@@ -161,7 +247,9 @@ by any clinician, and not a medical record. It is the browser's own print-to-PDF
 ## Not built
 
 No patient accounts, no booking history page, no real availability calendar (slots are
-generated), no server-side chat storage, no streaming. This is a demo; each of those is a
+generated — though a doctor is now only offered on the days they sit), no server-side chat
+or voice storage, no Gemini session resumption (a reconnect starts a fresh session and hands
+it a short summary of what is on screen). This is a demo; each of those is a
 deliberate omission rather than an oversight.
 
 ## Disclaimer

@@ -8,7 +8,9 @@ export const sql = neon(process.env.DATABASE_URL || "postgresql://unset:unset@un
 /**
  * Sliding-window rate limit backed by the `api_hits` table.
  * One round trip: prune expired rows, record this hit, count what remains.
- * Returns true when the caller is over budget.
+ * Returns false when the caller is within budget, otherwise the number of seconds
+ * until the oldest hit in the window ages out — a truthy value, so `if (await
+ * overLimit(...))` still reads naturally, and the number feeds `Retry-After`.
  *
  * ponytail: Postgres instead of Redis — no second provider to provision.
  * Move to Upstash if chat volume makes the per-request round trip hurt.
@@ -18,7 +20,7 @@ export async function overLimit(
   route: string,
   limit: number,
   windowMinutes = 60,
-): Promise<boolean> {
+): Promise<false | number> {
   const rows = await sql`
     WITH pruned AS (
       DELETE FROM api_hits
@@ -26,14 +28,26 @@ export async function overLimit(
     ), inserted AS (
       INSERT INTO api_hits (ip, route) VALUES (${ip}, ${route})
     )
-    SELECT count(*)::int AS n FROM api_hits
+    SELECT count(*)::int AS n,
+      ceil(extract(epoch FROM min(at) + make_interval(mins => ${windowMinutes}) - now()))::int AS retry
+    FROM api_hits
     WHERE ip = ${ip} AND route = ${route}
       AND at >= now() - make_interval(mins => ${windowMinutes})
   `;
   // The main SELECT runs on the pre-CTE snapshot, so `n` counts the PRIOR hits and
   // excludes the one just inserted. Request number `limit + 1` is therefore the first
-  // to see n === limit, which is exactly where it should be refused.
-  return (rows[0]?.n ?? 0) >= limit;
+  // to see n === limit, which is exactly where it should be refused. Refused requests
+  // are still recorded, so hammering keeps the window full — `retry` is a lower bound.
+  if ((rows[0]?.n ?? 0) < limit) return false;
+  return Math.max(1, rows[0]?.retry ?? windowMinutes * 60);
+}
+
+/** Every rate-limited JSON endpoint refuses the same way: 429, Retry-After, and a flag the client can branch on. */
+export function tooMany(error: string, retryAfter: number): Response {
+  return Response.json(
+    { error, rateLimited: true, retryAfter },
+    { status: 429, headers: { "Retry-After": String(retryAfter) } },
+  );
 }
 
 export function clientIp(req: Request): string {

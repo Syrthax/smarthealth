@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "db:reset": "node --env-file-if-exists=.env.local scripts/db.mjs",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/db.mjs migrate",
     "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {

@@ -48,6 +48,10 @@ CREATE TABLE bookings (
   phone        text NOT NULL,
   slot         text NOT NULL,
   ref_code     text NOT NULL UNIQUE,
+  -- Server-issued nonce from a confirmed voice proposal (lib/pending.ts). ref_code is
+  -- minted fresh on every request, so it cannot recognise a retry; this can. NULL for
+  -- dialog bookings, and NULLs never collide.
+  idem_key     text UNIQUE,
   created_at   timestamptz NOT NULL DEFAULT now()
 );
 

@@ -1,11 +1,12 @@
-import { sql, overLimit, clientIp } from "@/lib/db";
+import { clientIp, tooMany } from "@/lib/db";
+import { book } from "@/lib/booking";
 
-const BOOK_LIMIT_PER_HOUR = 5;
-const KINDS = ["doctor", "test", "referral"] as const;
-
-const refCode = () =>
-  "MHC-" + Math.random().toString(36).toUpperCase().slice(2, 6) + Date.now().toString(36).toUpperCase().slice(-3);
-
+/**
+ * The booking dialog's door into lib/booking.ts. All the rules live there, shared with
+ * the voice agent; this only translates the dialog's `{ kind, refId }` into an item.
+ * The kind the client sends is not trusted — whether a test is a referral is decided by
+ * its lab, server-side.
+ */
 export async function POST(req: Request) {
   let b: Record<string, unknown>;
   try {
@@ -16,50 +17,22 @@ export async function POST(req: Request) {
 
   const kind = String(b.kind ?? "");
   const refId = Number(b.refId);
-  const name = String(b.patientName ?? "").trim();
-  const phone = String(b.phone ?? "").trim();
-  const slot = String(b.slot ?? "").trim();
-
-  if (!KINDS.includes(kind as (typeof KINDS)[number]))
+  if (!["doctor", "test", "referral"].includes(kind))
     return Response.json({ error: "Unknown booking type." }, { status: 400 });
-  if (!Number.isInteger(refId) || refId < 1)
-    return Response.json({ error: "Unknown item." }, { status: 400 });
-  if (name.length < 2 || name.length > 80)
-    return Response.json({ error: "Please enter the patient's full name." }, { status: 400 });
-  if (!/^[+\d][\d\s-]{7,17}$/.test(phone))
-    return Response.json({ error: "Please enter a valid phone number." }, { status: 400 });
-  if (!slot || slot.length > 40)
-    return Response.json({ error: "Please choose a slot." }, { status: 400 });
 
-  if (await overLimit(clientIp(req), "book", BOOK_LIMIT_PER_HOUR))
-    return Response.json(
-      { error: `This demo allows ${BOOK_LIMIT_PER_HOUR} bookings an hour. Please try later.` },
-      { status: 429 },
-    );
+  const result = await book(clientIp(req), {
+    item: kind === "doctor" ? { doctorId: refId } : { testId: refId },
+    patientName: String(b.patientName ?? ""),
+    phone: String(b.phone ?? ""),
+    slot: String(b.slot ?? ""),
+    // No idemKey: only server-signed voice proposals carry one. The dialog guards against
+    // double submits by disabling its button; a key it made up would prove nothing.
+  });
 
-  // The referenced row must exist — never store a booking against a phantom id.
-  const exists =
-    kind === "doctor"
-      ? await sql`SELECT 1 FROM doctors WHERE id = ${refId}`
-      : await sql`SELECT 1 FROM tests WHERE id = ${refId}`;
-  if (exists.length === 0) return Response.json({ error: "Unknown item." }, { status: 400 });
-
-  const code = refCode();
-  try {
-    await sql`
-      INSERT INTO bookings (kind, ref_id, patient_name, phone, slot, ref_code)
-      VALUES (${kind}, ${refId}, ${name}, ${phone}, ${slot}, ${code})
-    `;
-  } catch (err) {
-    // Let the unique index be the arbiter rather than a check-then-insert, which
-    // would still let two requests through if they raced.
-    if ((err as { code?: string })?.code === "23505") {
-      return Response.json(
-        { error: "Someone has just taken that slot. Please choose another one." },
-        { status: 409 },
-      );
-    }
-    throw err;
+  if (!result.ok) {
+    if (result.code === "rate_limited") return tooMany(result.error, result.retryAfter ?? 3600);
+    return Response.json({ error: result.error, code: result.code }, { status: result.status });
   }
-  return Response.json({ refCode: code });
+  // `refCode` stays for anything still reading the old shape; `booking` is the canonical one.
+  return Response.json({ refCode: result.booking.reference, booking: result.booking });
 }

@@ -1,4 +1,4 @@
-// Applies db/schema.sql then db/seed.sql. Run: npm run db:reset
+// Applies db/schema.sql then db/seed.sql. Run: npm run db:reset (or db:migrate, see below)
 import { readFileSync } from "node:fs";
 import { neon } from "@neondatabase/serverless";
 
@@ -17,7 +17,11 @@ const statements = (file) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-for (const file of ["db/schema.sql", "db/seed.sql"]) {
+// `migrate` applies only db/migrate.sql: additive, idempotent changes for a database that
+// already holds bookings. Everything else drops and reseeds.
+const files = process.argv[2] === "migrate" ? ["db/migrate.sql"] : ["db/schema.sql", "db/seed.sql"];
+
+for (const file of files) {
   const stmts = statements(file);
   for (const stmt of stmts) await sql.query(stmt);
   console.log(`${file}: ${stmts.length} statements applied`);

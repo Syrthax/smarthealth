@@ -145,6 +145,45 @@ A session lasts exactly 7 minutes from sign-in, enforced by a signed HttpOnly co
 server; the page counts down in the nav and locks itself when time is up. Sign-in attempts
 are rate limited, and changing the password signs everyone out.
 
+## Project layout
+
+```
+app/                    Next.js App Router: pages and API routes
+  api/chat/             symptom assessment, streamed as NDJSON
+  api/book/             booking from the site's cards
+  api/voice/            Gemini Live token minting + server tools for the voice agent
+  api/login, logout/    the password gate
+components/
+  chat/                 the chat widget: state (chat-widget), wire (assistant), cards, print sheet
+  voice/                Gemini Live browser engine and the voice-mode visualiser
+  rec-card.tsx          doctor/test cards and the booking dialog, shared by pages and chat
+  session-lock.tsx      nav countdown for the signed-in session
+lib/                    pure server/shared logic, no React — this is where the safety rules live
+  chat.ts               red flags, system prompt, model-output parsing and voiding
+  guard.ts              injection screen, off-topic strikes
+  booking.ts, slots.ts  the one booking implementation and slot rules
+  voice.ts, voice-actions.ts, pending.ts   voice tool contract, server tools, signed proposals
+  db.ts, featherless.ts, auth.ts, session.ts
+db/                     schema.sql, seed.sql (fictional), migrate.sql
+scripts/db.mjs          applies the SQL files
+test/                   node --test suites; they import lib/*.ts directly
+proxy.ts                Next 16 middleware: gates every path behind the password
+```
+
+`context.md` has a file-by-file map and the invariants the chat pipeline must keep. Read it,
+and the safety sections above, before changing anything under `lib/` or `app/api/`.
+
+## Contributing
+
+1. `npm install`, then set up `.env.local` as in [Running it](#running-it). Never commit it;
+   `.env*` is git-ignored apart from `.env.example`.
+2. Work on a branch and open a pull request against `main`.
+3. Before pushing: `npm run lint`, `npx tsc --noEmit` and `npm test` should all be clean.
+4. Safety rules are enforced in code, not by the prompt. If you add a red-flag pattern, add a
+   positive *and* a negative test case. Keep the runtime dependencies at three.
+5. This is Next.js 16: `searchParams` is a Promise and middleware lives in `proxy.ts`. Check
+   `node_modules/next/dist/docs/` before reaching for a Next API from memory.
+
 ## Stack
 
 Next.js 16 (App Router) · Neon Postgres · Featherless AI · Gemini Live · Tailwind v4.

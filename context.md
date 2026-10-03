@@ -61,12 +61,17 @@ Env (`.env.local`, see `.env.example`): `DATABASE_URL`, `FEATHERLESS_API_KEY`, `
 | `app/api/login/route.ts`, `app/api/logout/route.ts` | Form POST sign-in (10 tries / 15 min per IP, 303 back with `?auth=wrong|locked`), sign-out clears both cookies. |
 | `components/session-lock.tsx` | Nav countdown + Lock button; full-page navigation to `/api/logout?reason=expired` at expiry. |
 | `app/api/voice/action/route.ts` | Whitelisted server tools only, 60/hr, 429 + Retry-After when limited. |
-| `components/voice-session.ts` | Browser engine: WebSocket, AudioWorklet mic capture (16 kHz), 24 kHz playback, red-flag gate on input transcript, playback hold until screened, medication gate on output transcript, tool dispatch. |
+| `components/voice/voice-session.ts` | Browser engine: WebSocket, AudioWorklet mic capture (16 kHz), 24 kHz playback, red-flag gate on input transcript, playback hold until screened, medication gate on output transcript, tool dispatch. |
 | `app/api/chat/route.ts` | POST handler that responds with **NDJSON**. Order: validate, rate limit (20/hr), red-flag short-circuit, load doctors/tests/specialties, stream the model, `extractJson`, hydrate ids/codes from DB, emit `done`. |
 | `app/api/book/route.ts` | Thin adapter: maps the dialog's `{kind, refId}` to an item and calls `book()`. Returns `{refCode, booking}`; failures `{error, code}`, 409 slot taken, 429 via `tooMany()`. |
 | `app/page.tsx`, `app/doctors/page.tsx`, `app/labs/page.tsx` | Server components (`force-dynamic`) that query Postgres directly. `/doctors?specialty=X` filters. |
 | `app/layout.tsx` | Nav, footer, and `<ChatWidget/>` mounted on every page. IBM Plex fonts. |
-| `components/chat-widget.tsx` | Client. Chat panel, `askAssistant()` stream reader (used by text *and* voice's `assess_symptoms`), id-based `upsert`, `localStorage` transcript (`mhc.chat`), question cards, urgency bar, `PendingCard`/`BookingCard`, `VoiceBar`, voice tool dispatch (`runTool`), consent-checked `confirmPending`, print-to-PDF `TranscriptSheet`. |
+| `components/chat/chat-widget.tsx` | Client. The chat panel and all its state: id-based `upsert`, `localStorage` transcript (`mhc.chat`), voice session wiring, voice tool dispatch (`runTool`), consent-checked `confirmPending`. |
+| `components/chat/assistant.ts` | No React. `askAssistant()` NDJSON stream reader (used by text *and* voice's `assess_symptoms`), `forModel()` memory marker, `finished()` (done event → message), `serverAction()`, `speak()`. |
+| `components/chat/message-cards.tsx` | Presentational per-message UI: `AssistantMessage`, question cards, urgency bar, `PendingCard`/`BookingCard`, `VoiceBar`, `Thinking`. |
+| `components/chat/transcript-sheet.tsx` | Print-to-PDF `TranscriptSheet` ("Save for your doctor"). |
+| `components/chat/types.ts` | `Msg`, `Pending`, `Urgency`: the transcript shape shared by the files above. |
+| `components/voice/voice-orb.tsx` | The voice-mode visualiser that replaces the chat while a session is live. |
 | `components/rec-card.tsx` | Client. `DoctorCard`, `TestCard`, `BookingDialog` (native `<dialog>`, slots from `lib/slots.ts`, doctor's days only). Dispatches `mhc:booked` (`BOOKED_EVENT`) with the canonical confirmation. Remembers name/phone in `localStorage` (`mhc.patient`). |
 | `db/schema.sql`, `db/seed.sql` | Schema plus fictional seed data (12 specialties, 14 doctors, 3 labs, 22 tests). |
 | `scripts/db.mjs` | Applies schema then seed (or `migrate` → `db/migrate.sql` only) by naively splitting on `;\n`. Seed strings must never contain `;` followed by a newline. |
@@ -122,7 +127,7 @@ These guarantees are enforced **in code, not by the prompt**. That is the point 
    from the model, or an `injectionAttempt`) gets a server-written line; three in a row ends the
    conversation (`done.ended`, the widget swaps the composer for "Start a new conversation").
    In voice the count lives in the widget (`off_topic` tool, and the injection gate in
-   `voice-session.ts` that drops the reply unplayed); `endAfterReply()` closes the session once
+   `components/voice/voice-session.ts` that drops the reply unplayed); `endAfterReply()` closes the session once
    the goodbye has been heard. Both modes open with the front-desk introduction.
 6. **One event shape for every path.** The route emits `{"t":"reply","v":<text so far>}`
    (cumulative, not a delta) and then exactly one `{"t":"done", reply, urgency, nextSteps,
@@ -144,7 +149,7 @@ These guarantees are enforced **in code, not by the prompt**. That is the point 
    `speechSynthesis`, not the model.
 
 Conversation memory: the client sends the last 12 messages (6 exchanges, each truncated to 1500
-chars). Assistant turns are rewritten by `forModel()` to append
+chars). Assistant turns are rewritten by `forModel()` (`components/chat/assistant.ts`) to append
 `[previously recommended: departments…; tests…; urgency…]` so the model builds on earlier
 decisions. The system prompt refers to this marker. Change both together.
 

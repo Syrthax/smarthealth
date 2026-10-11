@@ -336,7 +336,11 @@ export default function ChatWidget() {
         const history = messagesRef.current.slice(1).filter(conversational);
         while (history.length && history[history.length - 1].role === "assistant") history.pop();
         const last = history[history.length - 1]?.content ?? "";
-        if (last.trim().length < 3 && typeof args.description === "string")
+        // When they spoke Hindi or another Indian language, the agent's English account of
+        // it goes last as well: the red-flag patterns and the assessment model both read
+        // English, and the route screens the latest user message.
+        const spoken = history.filter((m) => m.role === "user").map((m) => m.content).join(" ");
+        if ((last.trim().length < 3 || /[^\u0000-\u024F\u2000-\u206F]/.test(spoken)) && typeof args.description === "string")
           history.push({ role: "user", content: args.description.slice(0, 1500) });
         if (!history.length) return { ok: false, code: "invalid", message: "Ask the patient what they have been feeling." };
 
@@ -358,8 +362,8 @@ export default function ChatWidget() {
           // Instructions travel with the result, right where the model composes its answer —
           // a rule only in the system prompt was not enough to stop it adding a disclaimer.
           howToSayIt: card.question
-            ? "Ask exactly this question, then wait for the answer. Do not recommend anything yet."
-            : "Say what it could be, who to see and how soon, and what to prepare for. Then offer to book, and stop. Add no disclaimer: do not say this is not medical advice or to see a healthcare professional — naming the doctor already is that.",
+            ? "Ask exactly this question, in the patient's language, then wait for the answer. Do not recommend anything yet."
+            : "In the patient's language: say what it could be, who to see and how soon, and what to prepare for — as a suggestion they are free to take or leave, never as something they must do. Then offer to book, and stop. Add no disclaimer: do not say this is not medical advice or to see a healthcare professional — naming the doctor already is that.",
           reply: card.content,
           urgency: card.urgency,
           assessment: card.assessment,

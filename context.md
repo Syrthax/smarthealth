@@ -144,7 +144,9 @@ These guarantees are enforced **in code, not by the prompt**. That is the point 
    `assess_symptoms` → `/api/chat`. Facts only from tool results. Bookings are two-phase
    (`prepare_booking` writes nothing; `confirm_booking` needs a Confirm press or a "yes" in the
    patient's own transcript after the proposal, and a valid signed token). The model sees a
-   short pending id, never the token. Red flags are screened on every input transcript
+   short pending id, never the token. "Book the earliest" still goes through that yes:
+   `get_slots` (free slots only for a doctor, `earliest`, optional `date`/`partOfDay`) makes the
+   agent quick, not autonomous. Red flags are screened on every input transcript
    fragment in the browser and end the session; the fixed emergency answer is spoken by
    `speechSynthesis`, not the model.
 
@@ -184,6 +186,12 @@ decisions. The system prompt refers to this marker. Change both together.
   the patient directly, and audio already played cannot be recalled. See README "What voice
   guarantees". Consent/emergency flows need a manual browser test; they have no automated
   end-to-end coverage.
+- Voice replies in the patient's language, but the browser-side gates (`redFlag`, medication,
+  injection, disclaimer) are English regexes. For non-Latin speech the widget appends the
+  agent's English `description` as the last user message so `/api/chat` screens it. Consent
+  (`patientAgreed`) and the noise gate do understand Hindi, in both scripts.
+- Barge-in is on (`START_OF_ACTIVITY_INTERRUPTS`). Noise that interrupts without any words
+  triggers `RESUME_NOTE` after 3 s of no transcript. Needs a manual browser test.
 - No Gemini session resumption. A reconnect is a fresh session seeded with a text summary.
 
 ## Deliberately not built

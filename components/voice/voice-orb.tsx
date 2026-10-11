@@ -22,7 +22,7 @@ const LABEL: Record<VoiceStatus, string> = {
  * The whole voice interface: one circle. While the patient talks, bars and a swell follow
  * their microphone. While the assistant is working something out, it becomes a bubble that
  * floats and turns. While it speaks, the circle is still. The written label underneath
- * always says which, so nothing rests on motion or colour. A tap interrupts the agent; holding for
+ * always says which, so nothing rests on motion or colour. Talking over the agent stops it, and so does a tap; holding for
  * HOLD_MS ends the conversation, with a ring that fills while you hold so the difference
  * is visible before it happens. Space or Enter does the same from the keyboard.
  */
@@ -186,7 +186,7 @@ export default function VoiceOrb({
         type="button"
         // The button that started voice has just disappeared; land focus here instead.
         autoFocus
-        aria-label="Voice assistant. Press to interrupt. Press and hold to end the conversation."
+        aria-label="Voice assistant. Speak or press to interrupt. Press and hold to end the conversation."
         aria-describedby="orb-hint"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -229,7 +229,7 @@ export default function VoiceOrb({
         {holding ? "Keep holding to end…" : awaitingYes ? "Waiting for your yes — or press Confirm" : LABEL[status]}
       </p>
       <p id="orb-hint" className="mt-1 text-[12px] text-muted">
-        Tap to interrupt · hold to end
+        Speak or tap to interrupt · hold to end
       </p>
     </div>
   );

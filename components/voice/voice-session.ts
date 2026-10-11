@@ -58,6 +58,11 @@ const GREETING_NOTE = `Note from the page, not the patient: the patient has just
 const NOISE_NOTE =
   "Note from the page, not the patient: what you just heard was background noise, not the patient answering. Do not thank them or move on. Say briefly that you did not quite catch that, and ask your last question again.";
 
+const RESUME_NOTE =
+  "Note from the page, not the patient: you were cut off by background noise and the patient did not say anything. Pick up where you left off — say your last line again, briefly.";
+/** After a barge-in, how long to wait for the patient's words before deciding it was only noise. */
+const RESUME_WAIT_MS = 3000;
+
 const UNAVAILABLE = "Voice is not available right now. You can keep using the text assistant below.";
 
 // Runs on the audio thread. Box-filter downsample from the device rate to 16 kHz PCM16,
@@ -157,6 +162,8 @@ export class VoiceSession {
   /** Output heard since endAfterReply() — speech from before it ("let me confirm that") is not the goodbye. */
   private spokeSinceArmed = false;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Armed when the agent is cut off and no words have arrived yet to say who by. */
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   // What the page is showing. Every change goes through setStatus(), which smooths out the
   // flickers a raw event stream produces: a tool result sent back is followed by silence
@@ -355,6 +362,7 @@ export class VoiceSession {
 
   private teardown() {
     if (this.endTimer) clearTimeout(this.endTimer);
+    this.clearResume();
     if (this.releaseTimer) clearTimeout(this.releaseTimer);
     if (this.noiseTimer) clearTimeout(this.noiseTimer);
     if (this.settleTimer) clearTimeout(this.settleTimer);
@@ -410,8 +418,12 @@ export class VoiceSession {
     if (sc?.outputTranscription?.text) this.said(sc.outputTranscription.text);
     if (sc?.interrupted) {
       // The patient spoke over it. Whatever was queued is now stale.
+      const cutShort = this.playing.size > 0 || this.held.length > 0 || this.modelOpen;
       this.stopPlayback();
       this.endModelTurn(null);
+      // Or something did — a door, a TV. If no words follow and the agent stays silent,
+      // the patient is left with half a question, so the agent is asked to say it again.
+      if (cutShort && !this.userOpen && !this.endAfter) this.armResume();
     }
     if (sc?.turnComplete) this.endModelTurn(null);
 
@@ -424,7 +436,26 @@ export class VoiceSession {
     }
   }
 
+  private armResume() {
+    this.clearResume();
+    this.resumeTimer = setTimeout(() => {
+      this.resumeTimer = null;
+      if (this.over || this.userOpen || this.modelOpen) return;
+      // Transcription can trail a long sentence. While the microphone is still clearly
+      // picking up a voice, keep waiting rather than talk over the patient.
+      const mic = this.bands(this.micTap, 8);
+      if (mic.reduce((a, b) => a + b, 0) / mic.length > 0.15) return this.armResume();
+      this.sendText(RESUME_NOTE);
+    }, RESUME_WAIT_MS);
+  }
+
+  private clearResume() {
+    if (this.resumeTimer) clearTimeout(this.resumeTimer);
+    this.resumeTimer = null;
+  }
+
   private heard(fragment: string) {
+    this.clearResume();
     if (!this.userOpen) {
       this.userOpen = true;
       this.userTurn++;
@@ -478,6 +509,7 @@ export class VoiceSession {
 
   private openModelTurn() {
     if (this.modelOpen) return;
+    this.clearResume();
     this.modelOpen = true;
     this.userOpen = false;
     this.modelTurn++;

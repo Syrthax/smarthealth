@@ -92,6 +92,17 @@ booking happened; the page and the voice both report that one result.
 - **Retries cannot double-book.** The proposal's nonce is stored as `bookings.idem_key`. A
   reconnect, a duplicated tool call or a second "yes" returns the booking already made, and
   does not spend another of the five an hour.
+- **It talks like a person at the desk.** It answers in the language of your latest message
+  (English, then Hindi, then English again if that is how you speak), in an Indian accent and
+  a relaxed register, and it stops when you start talking. Background noise that cuts it off
+  without anyone speaking is noticed in the page, which asks it to pick up where it left off.
+- **It works things out.** "The earliest appointment with Dr. Rao" is one lookup: doctors can
+  be found by name, and `get_slots` returns only slots that are still free for that doctor,
+  soonest first, optionally narrowed to a day or a morning/afternoon. It then proposes that
+  one slot — and still waits for your yes.
+- **Advice is offered, not imposed.** Recommendations are phrased as suggestions the patient
+  may take or leave; only an emergency is stated as an instruction. When it does not know
+  something, it says so instead of filling the silence.
 - **It never says "booked" unless the insert succeeded.** A taken slot, a rate limit or an
   error comes back as `ok: false` with a sentence to say aloud, and the card shows it too.
 
@@ -111,6 +122,13 @@ you directly, so voice cannot — and this README would rather say so than prete
   word the server *did* say — "stop antihistamines 72 hours before" is a real prep note —
   may be relayed. Audio that has already played cannot be unsaid; the gate bounds it to a
   fragment, not to zero.
+
+- The red-flag, medication, injection and disclaimer patterns are written in English. When
+  you speak another language the agent passes `assess_symptoms` an English account of what
+  you said, so the server's red-flag check and the assessment still read it — but the
+  in-browser gates on each transcript fragment do not match Hindi words. In another language
+  an emergency is caught at the assessment step, or by the agent's own instruction to send
+  you to the emergency line, not on the first syllable.
 
 The transcript is text in `localStorage`, like typed chat. Audio is never stored.
 

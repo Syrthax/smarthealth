@@ -45,17 +45,18 @@ export async function POST(req: Request) {
     generationConfig: { responseModalities: ["AUDIO"] },
     systemInstruction: { parts: [{ text: voiceInstruction() }] },
     tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-    // Background noise was being taken for the patient barging in, cutting the agent off
-    // mid-question. Speech now has to be clearly speech (low start sensitivity, 300 ms of
-    // it) before it counts, and it never interrupts the agent: interrupting is deliberate —
-    // a tap on the orb. Whatever is heard meanwhile is still answered afterwards.
+    // The agent stops the moment the patient starts talking, as a person would. Background
+    // noise used to be taken for that and cut it off mid-question, so speech still has to be
+    // clearly speech (low start sensitivity, 300 ms of it) before it counts — and when noise
+    // gets through anyway, the page notices nobody actually said anything and tells the
+    // agent to pick up where it left off (voice-session.ts). A tap on the orb still works.
     realtimeInputConfig: {
       automaticActivityDetection: {
         startOfSpeechSensitivity: "START_SENSITIVITY_LOW",
         prefixPaddingMs: 300,
         silenceDurationMs: 700,
       },
-      activityHandling: "NO_INTERRUPTION",
+      activityHandling: "START_OF_ACTIVITY_INTERRUPTS",
     },
     // Both transcripts are what the page shows, and the input one is what the red-flag
     // and consent checks read. Without them the browser would be flying blind.

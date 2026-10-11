@@ -36,7 +36,8 @@ function fakeDb({ limited = false, slotTaken = false } = {}) {
     }
     if (/FROM bookings WHERE idem_key/.test(text)) return bookings.filter((b) => b.idem_key === values[0]);
     if (/FROM doctors WHERE id =/.test(text)) return doctors.filter((d) => d.id === values[0]);
-    if (/FROM doctors/.test(text)) return values[0] === "" ? doctors : doctors.filter((d) => d.specialty.toLowerCase().includes(values[0].toLowerCase()));
+    if (/SELECT slot FROM bookings/.test(text)) return bookings.filter((b) => b.kind === "doctor" && b.ref_id === values[0]).map((b) => ({ slot: b.slot }));
+    if (/FROM doctors/.test(text)) return values[0] === "" ? doctors : doctors.filter((d) => `${d.specialty} ${d.name}`.toLowerCase().includes(values[0].toLowerCase()));
     if (/FROM specialties/.test(text)) return [{ name: "Cardiology" }, { name: "General Medicine" }];
     if (/WHERE t\.id =/.test(text)) return tests.filter((t) => t.id === values[0]);
     if (/WHERE t\.code =/.test(text)) return tests.filter((t) => t.code === values[0]);
@@ -210,6 +211,42 @@ test("voice actions refuse unknown tests and doctors", async () => {
   const none = await runAction("get_doctor_options", { specialty: "Dentistry" }, "ip", db.deps);
   assert.equal(none.ok, false);
   assert.match(none.message, /General Medicine/);
+});
+
+test("a doctor can be found by name, and an unknown name is refused", async () => {
+  const db = fakeDb();
+  const rao = await runAction("get_doctor_options", { name: "Dr. Rao" }, "ip", db.deps);
+  assert.equal(rao.doctors[0].doctorId, 1);
+  const nobody = await runAction("get_doctor_options", { name: "Dr. Strange" }, "ip", db.deps);
+  assert.equal(nobody.code, "not_found");
+  assert.match(nobody.message, /Strange/);
+});
+
+test("get_slots offers only free slots, earliest first, and honours a day or time preference", async () => {
+  const db = fakeDb();
+  const open = await runAction("get_slots", { doctorId: 1 }, "ip", db.deps);
+  assert.equal(open.earliest.value, doctorSlot());
+  assert.equal(open.slots.length, 6);
+
+  // The earliest slot gets booked: it is no longer the earliest on offer.
+  db.bookings.push({ kind: "doctor", ref_id: 1, slot: open.earliest.value });
+  const next = await runAction("get_slots", { doctorId: 1 }, "ip", db.deps);
+  assert.equal(next.earliest.value, open.slots[1].value);
+  assert.ok(next.slots.every((s) => s.value !== open.earliest.value));
+
+  const afternoon = await runAction("get_slots", { doctorId: 1, partOfDay: "afternoon" }, "ip", db.deps);
+  assert.ok(afternoon.matched && afternoon.slots.every((s) => s.value.slice(11) >= "12:00"));
+
+  const day = open.slots[5].value.slice(0, 10);
+  const onDay = await runAction("get_slots", { doctorId: 1, date: day }, "ip", db.deps);
+  assert.ok(onDay.matched && onDay.slots.every((s) => s.value.startsWith(day)));
+
+  // A day the doctor does not sit: said plainly, with the nearest free slots instead.
+  const friday = upcomingSlots(20).find((s) => new Date(s.value.slice(0, 10)).getUTCDay() === 5).value.slice(0, 10);
+  const off = await runAction("get_slots", { doctorId: 1, date: friday }, "ip", db.deps);
+  assert.equal(off.matched, false);
+  assert.ok(off.earliest.value.slice(0, 10) > friday || off.slots.length > 0);
+  assert.equal((await runAction("get_slots", { date: "Friday" }, "ip", db.deps)).code, "invalid");
 });
 
 test("prepare_booking writes nothing; only a signed confirm books, and only once", async () => {

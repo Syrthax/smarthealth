@@ -1,20 +1,33 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import Link from "next/link";
 import ChatWidget from "@/components/chat/chat-widget";
 import SessionLock from "@/components/session-lock";
 
-const plexSans = IBM_Plex_Sans({
+// Self-hosted (latin subset, SIL OFL) rather than next/font/google: Google Fonts now serves
+// URLs like `font?kit=…&skey=…&v=v23`, which Turbopack's google-font loader in Next 16.3
+// rejects ("queries have exactly one entry"). Local files also keep `next build` and
+// `next dev` working offline. Weights match what the CSS uses: 400/500/600 sans, 400/500 mono.
+const plexSans = localFont({
   variable: "--font-plex-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  display: "swap",
+  adjustFontFallback: "Arial",
+  src: [
+    { path: "./fonts/ibm-plex-sans-latin-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/ibm-plex-sans-latin-500.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/ibm-plex-sans-latin-600.woff2", weight: "600", style: "normal" },
+  ],
 });
 
-const plexMono = IBM_Plex_Mono({
+const plexMono = localFont({
   variable: "--font-plex-mono",
-  subsets: ["latin"],
-  weight: ["400", "500"],
+  display: "swap",
+  adjustFontFallback: false,
+  src: [
+    { path: "./fonts/ibm-plex-mono-latin-400.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/ibm-plex-mono-latin-500.woff2", weight: "500", style: "normal" },
+  ],
 });
 
 export const metadata: Metadata = {

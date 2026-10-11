@@ -4,7 +4,7 @@ import { patientAgreed, medicationBreach, TOOL_DECLARATIONS, SERVER_TOOLS, voice
 import { emergencyAnswer, redFlag, EMERGENCY_LINE, OUT_OF_SCOPE_REPLY } from "../lib/chat.ts";
 
 test("consent is read from the patient's own words, and hesitation wins", () => {
-  for (const yes of ["Yes please", "yeah go ahead", "okay, book it", "haan, theek hai", "Correct, confirm it"])
+  for (const yes of ["Yes please", "yeah go ahead", "okay, book it", "haan, theek hai", "Correct, confirm it", "हाँ, कर दीजिए", "जी बिल्कुल", "haan ji kar do"])
     assert.ok(patientAgreed(yes), `should count as yes: ${yes}`);
   for (const no of [
     "",
@@ -14,6 +14,10 @@ test("consent is read from the patient's own words, and hesitation wins", () => 
     "hold on",
     "can you do a different day",
     "not yet",
+    "जी नहीं",
+    "हाँ लेकिन रुकिए",
+    "nahin, abhi mat karo",
+    "एनर्जी", // "जी" inside another word is not a yes
   ])
     assert.equal(patientAgreed(no), false, `should not count as yes: ${no}`);
 });
@@ -43,6 +47,10 @@ test("the voice instruction carries the fixed numbers and the booking rule", () 
   assert.ok(text.includes(EMERGENCY_LINE));
   assert.ok(text.includes("+91 80 4000 1200"));
   assert.match(text, /Never say something is booked unless confirm_booking returned ok/);
+  // The agent is told the date, so "tomorrow" becomes a date it can pass to get_slots.
+  assert.ok(voiceInstruction(new Date("2026-09-24T05:00:00Z")).includes("2026-09-24"));
+  assert.match(text, /reply in the language they just used/);
+  assert.match(text, /never call anything compulsory or mandatory/);
 });
 
 test("voice and text share one deterministic emergency answer", () => {
@@ -64,10 +72,12 @@ test("stray transcribed noise is recognised, real short answers are not", async 
     "yes", "No", "about a week", "2 days", "since Monday", "gradually", "Suddenly",
     "evenings", "nausea", "none", "my knee", "haan", "fever too", "the first one", "98765 43210",
     "It started when I was at work",
+    "दो दिन", "कल से", "kal se", "bahut dard",
   ])
     assert.equal(soundsLikeNoise(answer), false, `should be an answer: "${answer}"`);
   assert.ok(askedForName("Could I have the patient's full name, please?"));
   assert.equal(askedForName("How long have you had the headache?"), false);
+  assert.ok(askedForName("आपका पूरा नाम क्या है?"));
 });
 
 test("appended disclaimers are cut, the recommendation is kept", async () => {
